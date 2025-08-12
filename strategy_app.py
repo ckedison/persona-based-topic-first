@@ -30,7 +30,7 @@ def generate_embeddings(_df, api_key):
         
         # 使用 text-embedding-004 模型
         result = genai.embed_content(
-            model='models/text-embedding-004', # <-- 已修正
+            model='models/text-embedding-004',
             content=texts_to_embed,
             task_type="RETRIEVAL_DOCUMENT"
         )
@@ -91,6 +91,72 @@ def create_dynamic_prompt(topic, selected_personas_df):
 請確保你的建議具體、有創意且高度相關。
 """
 
+def create_funnel_prompt(topic, strategy_text):
+    """根據初步策略生成行銷漏斗策略的 Prompt"""
+    return f"""
+請扮演一位經驗豐富的首席行銷長 (CMO)，專精於內容行銷漏斗策略。
+我的核心主題是：「{topic}」。
+
+這是一份由 AI 內容策略顧問針對不同 Persona 生成的初步內容點子清單：
+```markdown
+{strategy_text}
+```
+
+你的任務是：
+1.  **分析並篩選**：從上述所有點子中，挑選出 5-7 個最具潛力、且能串連成一個完整行銷旅程的內容點子。挑選原則請綜合考量：**流量潛力（能否吸引廣泛關注）、信任建立（能否展現專業）、轉換價值（能否促進行動）**。
+2.  **建構行銷漏斗**：將你挑選出的點子，佈局到一個經典的行銷漏斗中，包含「認知 (Awareness)」、「考慮 (Consideration)」、「轉換 (Conversion)」三個階段。
+3.  **提供行動方案**：為每一個入選的點子，提供具體的執行建議。
+
+請嚴格遵循以下格式輸出，使用 Markdown 語法：
+
+---
+
+### **整合行銷漏斗策略："{topic}"**
+
+**📈 總體策略概述:**
+(請在此簡述這個漏斗的核心邏輯，說明如何引導用戶從陌生到成交。)
+
+---
+
+### **1. 認知階段 (Awareness - TOFU)**
+*目標：擴大觸及，吸引對此主題感興趣的潛在用戶，建立品牌知名度。*
+
+**➡️ 內容點子 1:** [從清單中選擇的內容點子名稱]
+   - **目標 Persona:** [此點子主要針對的 Persona]
+   - **核心目標:** [此內容要達成的具體目標，例如：引發社群分享、搶佔特定 SEO 關鍵字]
+   - **引流與擴散建議:** [例如：發布在 Instagram Reels / TikTok，搭配熱門音樂；優化 SEO 標題與關鍵字；投稿到相關的 Facebook 社團]
+
+**➡️ 內容點子 2:** [從清單中選擇的內容點子名稱]
+   - **目標 Persona:** [此點子主要針對的 Persona]
+   - **核心目標:** [此內容要達成的具體目標]
+   - **引流與擴散建議:** [具體的引流方法]
+
+---
+
+### **2. 考慮階段 (Consideration - MOFU)**
+*目標：建立專業信任，展現解決方案的價值，讓潛在用戶將我們納入優先選擇。*
+
+**➡️ 內容點子 3:** [從清單中選擇的內容點子名稱]
+   - **目標 Persona:** [此點子主要針對的 Persona]
+   - **核心目標:** [例如：獲取 Email 名單、提升網站停留時間]
+   - **導流與互動設計:** [例如：在認知階段的內容中安插此內容的連結；設計成可下載的 PDF 檢查表以換取 Email；文末引導至相關的深度文章]
+
+**➡️ 內容點子 4:** [從清單中選擇的內容點子名稱]
+   - **目標 Persona:** [此點子主要針對的 Persona]
+   - **核心目標:** [此內容要達成的具體目標]
+   - **導流與互動設計:** [具體的導流方法]
+
+---
+
+### **3. 轉換階段 (Conversion - BOFU)**
+*目標：促使用戶採取最終行動，例如購買、註冊、或預約諮詢。*
+
+**➡️ 內容點子 5:** [從清單中選擇的內容點子名稱]
+   - **目標 Persona:** [此點子主要針對的 Persona]
+   - **核心目標:** [例如：引導至產品頁面、完成線上註冊]
+   - **導購與行動呼籲 (CTA) 建議:** [例如：在內容中直接比較自家產品與競品的優勢；提供限時優惠碼；設計清晰的「立即體驗」按鈕]
+"""
+
 # --- 初始化 Session State ---
 if 'persona_df' not in st.session_state:
     st.session_state.persona_df = None
@@ -98,6 +164,9 @@ if 'matched_personas' not in st.session_state:
     st.session_state.matched_personas = None
 if 'api_key_configured' not in st.session_state:
     st.session_state.api_key_configured = False
+if 'strategy_text' not in st.session_state:
+    st.session_state.strategy_text = None
+
 
 # --- Streamlit 介面佈局 ---
 
@@ -145,7 +214,6 @@ with st.sidebar:
                 st.session_state.persona_df = df
                 st.success(f"成功載入 {len(df)} 筆 Persona 資料！")
                 
-                # 在此預先生成 Embeddings
                 if st.session_state.api_key_configured:
                     with st.spinner("正在為 Persona 資料建立語意索引..."):
                         st.session_state.persona_df = generate_embeddings(st.session_state.persona_df, api_key)
@@ -175,27 +243,25 @@ with st.sidebar:
         else:
             with st.spinner("正在進行語意分析與匹配..."):
                 try:
-                    # 為主題生成 Embedding
                     topic_embedding_result = genai.embed_content(
-                        model='models/text-embedding-004', # <-- 已修正
+                        model='models/text-embedding-004',
                         content=topic,
                         task_type="RETRIEVAL_QUERY"
                     )
                     topic_embedding = np.array(topic_embedding_result['embedding']).reshape(1, -1)
                     
-                    # 計算餘弦相似度
                     persona_embeddings = np.array(st.session_state.persona_df['embeddings'].tolist())
                     similarities = cosine_similarity(topic_embedding, persona_embeddings)[0]
                     
-                    # 更新 DataFrame 並排序
                     df = st.session_state.persona_df.copy()
                     df['score'] = similarities
-                    # 顯示分數大於 0.5 的結果，或至少顯示前10名
                     matched = df[df['score'] > 0.5].sort_values(by='score', ascending=False)
                     if len(matched) < 10:
                         matched = df.sort_values(by='score', ascending=False).head(10)
 
                     st.session_state.matched_personas = matched
+                    # 重置後續步驟的狀態
+                    st.session_state.strategy_text = None 
                 except Exception as e:
                     st.error(f"語意匹配時發生錯誤: {e}")
 
@@ -222,7 +288,7 @@ if st.session_state.matched_personas is not None:
 
     if selected_indices:
         st.markdown("---")
-        if st.button("🚀 為選定對象生成策略", use_container_width=True):
+        if st.button("🚀 為選定對象生成初步策略", use_container_width=True):
             if not st.session_state.api_key_configured:
                 st.error("請在左側側邊欄輸入您的 Gemini API 金鑰。")
             else:
@@ -231,12 +297,35 @@ if st.session_state.matched_personas is not None:
                     selected_df = st.session_state.matched_personas.loc[selected_indices]
                     prompt = create_dynamic_prompt(topic, selected_df)
 
-                    with st.spinner("🧠 AI 策略師正在為您撰寫策略，請稍候..."):
+                    with st.spinner("🧠 AI 內容顧問正在生成初步點子..."):
                         response = model.generate_content(prompt)
-                        st.subheader("4. AI 生成的內容策略")
-                        st.markdown(response.text)
+                        st.session_state.strategy_text = response.text
 
                 except Exception as e:
-                    st.error(f"生成策略時發生錯誤：{e}")
+                    st.error(f"生成初步策略時發生錯誤：{e}")
+                    st.session_state.strategy_text = None
+
+    if st.session_state.strategy_text:
+        st.markdown("---")
+        st.subheader("4. AI 生成的初步內容策略")
+        st.markdown(st.session_state.strategy_text)
+
+        st.markdown("---")
+        st.subheader("5. 整合行銷漏斗策略")
+        if st.button("🧠 生成整合行銷漏斗策略", use_container_width=True, type="primary"):
+            if not st.session_state.api_key_configured:
+                st.error("請在左側側邊欄輸入您的 Gemini API 金鑰。")
+            else:
+                try:
+                    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                    funnel_prompt = create_funnel_prompt(topic, st.session_state.strategy_text)
+                    
+                    with st.spinner("👑 AI 行銷總監正在建構漏斗策略..."):
+                        funnel_response = model.generate_content(funnel_prompt)
+                        st.markdown(funnel_response.text)
+
+                except Exception as e:
+                    st.error(f"生成行銷漏斗時發生錯誤：{e}")
+
 else:
     st.info("請在左側面板完成設定，匹配結果將顯示於此。")
