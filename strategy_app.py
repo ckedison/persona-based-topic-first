@@ -28,9 +28,9 @@ def generate_embeddings(_df, api_key):
         
         texts_to_embed = _df['embedding_text'].tolist()
         
-        # 使用 embedding-004 模型
+        # 使用 text-embedding-004 模型
         result = genai.embed_content(
-            model='models/embedding-004',
+            model='models/text-embedding-004', # <-- 已修正
             content=texts_to_embed,
             task_type="RETRIEVAL_DOCUMENT"
         )
@@ -177,7 +177,7 @@ with st.sidebar:
                 try:
                     # 為主題生成 Embedding
                     topic_embedding_result = genai.embed_content(
-                        model='models/embedding-004',
+                        model='models/text-embedding-004', # <-- 已修正
                         content=topic,
                         task_type="RETRIEVAL_QUERY"
                     )
