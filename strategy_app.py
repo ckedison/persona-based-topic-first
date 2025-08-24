@@ -5,6 +5,7 @@ import google.generativeai as genai
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 import io
+import re
 
 # --- 頁面設定 ---
 st.set_page_config(
@@ -79,7 +80,6 @@ def generate_and_validate_personas(topic, api_key, target_count=10, min_score=0.
         retries = 0
         required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
 
-
         while len(high_quality_personas_df) < target_count and retries < max_retries:
             st.info(f"第 {retries + 1}/{max_retries} 次嘗試：正在生成並驗證 Persona 候選名單...")
             
@@ -95,23 +95,27 @@ def generate_and_validate_personas(topic, api_key, target_count=10, min_score=0.
             raw_text = response.text.strip()
             
             # --- 強化 CSV 解析與驗證 ---
-            header_str = '"' + '","'.join(required_headers) + '"'
-            csv_start_index = raw_text.find(header_str)
-
-            if csv_start_index == -1:
-                st.warning(f"AI 回應格式不符 (找不到標頭)，正在重試...")
-                retries += 1
-                continue
-
-            csv_text = raw_text[csv_start_index:]
+            match = re.search(r'```csv\n(.*?)\n```', raw_text, re.DOTALL)
+            if match:
+                csv_text = match.group(1)
+            else:
+                # 如果找不到 markdown 區塊，就從標頭開始找
+                header_str = '"' + '","'.join(required_headers) + '"'
+                csv_start_index = raw_text.find(header_str)
+                if csv_start_index == -1:
+                    st.warning(f"AI 回應格式不符 (找不到標頭)，正在重試...")
+                    retries += 1
+                    continue
+                csv_text = raw_text[csv_start_index:]
+            
             csv_io = io.StringIO(csv_text)
             new_candidates_df = pd.read_csv(csv_io)
+            # --- 解析與驗證結束 ---
 
             if not all(h in new_candidates_df.columns for h in required_headers):
                 st.warning(f"AI 回應的 CSV 欄位不完整，正在重試...")
                 retries += 1
                 continue
-            # --- 解析與驗證結束 ---
 
             new_candidates_df['embedding_text'] = new_candidates_df['summary'].fillna('') + ' | ' + new_candidates_df['goals'].fillna('') + ' | ' + new_candidates_df['pain_points'].fillna('') + ' | ' + new_candidates_df['keywords'].fillna('')
             texts_to_embed = new_candidates_df['embedding_text'].tolist()
@@ -134,9 +138,14 @@ def generate_and_validate_personas(topic, api_key, target_count=10, min_score=0.
             all_candidates_df = pd.concat([all_candidates_df, new_candidates_df]).drop_duplicates(subset=['persona_name'])
             retries += 1
         
+        # --- 備案機制 ---
         if high_quality_personas_df.empty:
-            st.error("經過多次嘗試，AI 未能生成與主題高度相關的 Persona。請嘗試一個更具體或不同的核心主題。")
-            return None
+            st.warning("經過多次嘗試，未能找到足夠數量關聯度 >80% 的 Persona。現為您呈現最相關的候選結果。")
+            if not all_candidates_df.empty:
+                return all_candidates_df.sort_values(by='score', ascending=False).head(target_count)
+            else:
+                st.error("AI 未能生成任何有效的 Persona。請檢查您的 API 金鑰或嘗試不同的主題。")
+                return None
         
         return high_quality_personas_df.sort_values(by='score', ascending=False).head(target_count)
 
