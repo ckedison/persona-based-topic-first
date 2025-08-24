@@ -3,3 +3,4 @@ pandas
 google-generativeai
 numpy
 scikit-learn
+tabulate
