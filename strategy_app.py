@@ -17,7 +17,7 @@ st.set_page_config(
 
 # --- 核心功能函式 ---
 
-def create_persona_generation_prompt(topic, num_to_generate=20):
+def create_persona_generation_prompt(topic, num_to_generate=15):
     """為 AI 生成 Persona 建立 Prompt"""
     return f"""
 請扮演一位頂尖的市場研究與用戶體驗專家。
@@ -45,41 +45,17 @@ def create_persona_generation_prompt(topic, num_to_generate=20):
 請開始生成。
 """
 
-def create_persona_refinement_prompt(topic, failed_personas_df, num_to_generate):
-    """根據低分範例，建立優化版的 Persona 生成 Prompt"""
-    failed_examples = ""
-    if not failed_personas_df.empty:
-        failed_examples += "之前的嘗試中，以下幾個 Persona 範例與核心主題「{topic}」的關聯度不夠高。請你分析它們的缺點，並生成**完全不同且更聚焦**的新人選：\n"
-        for index, row in failed_personas_df.head(3).iterrows():
-            failed_examples += f"- '{row['persona_name']}' (摘要: {row['summary']})\n"
-
-    return f"""
-請扮演一位市場研究專家，我們正在進行一個迭代優化任務。
-核心主題是：「{topic}」。
-
-{failed_examples}
-
-你的新任務是，生成 {num_to_generate} 個**新的、與主題「{topic}」有更強、更直接關聯**的人物誌 (Persona)。請避免之前範例中過於寬泛或間接的描述。
-
-請同樣遵循以下的 CSV 格式，不要包含其他文字：
-```csv
-"persona_name","summary","goals","pain_points","keywords","preferred_formats"
-```
-"""
-
-def generate_and_select_personas(topic, api_key, target_count=10):
-    """單批次生成並優選 Persona"""
+def generate_personas_with_gemini(topic, api_key):
+    """單次呼叫 API 生成 Persona DataFrame"""
     try:
         genai.configure(api_key=api_key)
-        generation_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        prompt = create_persona_generation_prompt(topic)
+        response = model.generate_content(prompt)
         
-        st.info("正在生成一批 Persona 候選名單...")
-        prompt = create_persona_generation_prompt(topic, num_to_generate=20)
-        response = generation_model.generate_content(prompt)
         raw_text = response.text.strip()
-
-        # --- 強化 CSV 解析與驗證 ---
         required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
+        
         match = re.search(r'```csv\n(.*?)\n```', raw_text, re.DOTALL)
         if match:
             csv_text = match.group(1)
@@ -90,38 +66,18 @@ def generate_and_select_personas(topic, api_key, target_count=10):
                 st.error("AI 回應格式不符 (找不到標頭)，無法解析 Persona。")
                 return None
             csv_text = raw_text[csv_start_index:]
-        
+
         csv_io = io.StringIO(csv_text)
-        candidates_df = pd.read_csv(csv_io)
-
-        if not all(h in candidates_df.columns for h in required_headers):
-            st.error("AI 回應的 CSV 欄位不完整，無法解析 Persona。")
+        df = pd.read_csv(csv_io)
+        
+        if not all(h in df.columns for h in required_headers):
+            st.error("AI 生成的 Persona 格式不符，請稍後再試。")
             return None
-        # --- 解析與驗證結束 ---
-
-        st.info("正在為候選名單進行語意分析與評分...")
-        candidates_df['embedding_text'] = candidates_df['summary'].fillna('') + ' | ' + candidates_df['goals'].fillna('') + ' | ' + candidates_df['pain_points'].fillna('') + ' | ' + candidates_df['keywords'].fillna('')
-        texts_to_embed = candidates_df['embedding_text'].tolist()
-        
-        embeddings_result = genai.embed_content(model='models/text-embedding-004', content=texts_to_embed, task_type="RETRIEVAL_DOCUMENT")
-        candidates_df['embeddings'] = embeddings_result['embedding']
-
-        topic_embedding_result = genai.embed_content(model='models/text-embedding-004', content=topic, task_type="RETRIEVAL_QUERY")
-        topic_embedding = np.array(topic_embedding_result['embedding']).reshape(1, -1)
-
-        candidate_embeddings = np.array(candidates_df['embeddings'].tolist())
-        similarities = cosine_similarity(topic_embedding, candidate_embeddings)[0]
-        candidates_df['score'] = similarities
-
-        # 直接選出分數最高的 N 位
-        top_personas = candidates_df.sort_values(by='score', ascending=False).head(target_count)
-        
-        return top_personas
-
+            
+        return df
     except Exception as e:
-        st.error(f"自動生成 Persona 時發生嚴重錯誤: {e}")
+        st.error(f"自動生成 Persona 時發生錯誤: {e}")
         return None
-
 
 def create_query_fan_out_prompt(topic):
     """為 AI 生成 Query Fan Out 建立 Prompt"""
