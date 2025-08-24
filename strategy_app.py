@@ -16,13 +16,13 @@ st.set_page_config(
 
 # --- 核心功能函式 ---
 
-def create_persona_generation_prompt(topic):
+def create_persona_generation_prompt(topic, num_to_generate=15):
     """為 AI 生成 Persona 建立 Prompt"""
     return f"""
 請扮演一位頂尖的市場研究與用戶體驗專家。
 我的核心產品/服務主題是：「{topic}」。
 
-你的首要任務是深度思考「{topic}」這個主題的核心目標客群是誰。接著，為這個主題生成 10 個**與主題直接相關、且極具代表性**的潛在目標人物誌 (Persona)。**生成的 Persona 必須是這個主題最核心、最直接的目標客群，避免生成過於寬泛或關聯度低的角色。**
+你的首要任務是深度思考「{topic}」這個主題的核心目標客群是誰。接著，為這個主題生成 {num_to_generate} 個**與主題直接相關、且極具代表性**的潛在目標人物誌 (Persona)。**生成的 Persona 必須是這個主題最核心、最直接的目標客群，避免生成過於寬泛或關聯度低的角色。**
 
 請嚴格遵循以下 CSV 格式輸出，包含標頭，並且不要有任何其他的開頭或結尾文字。每一筆資料的欄位內容請用雙引號 `"` 包覆，以避免格式錯誤。
 
@@ -30,7 +30,7 @@ def create_persona_generation_prompt(topic):
 "persona_name","summary","goals","pain_points","keywords","preferred_formats"
 "範例人物誌1","範例摘要1","範例目標1","範例痛點1","關鍵字1,關鍵字2","格式1,格式2"
 "範例人物誌2","範例摘要2","範例目標2","範例痛點2","關鍵字3,關鍵字4","格式3,格式4"
-... (直到第10筆)
+... (直到第{num_to_generate}筆)
 ```
 
 **生成指南:**
@@ -44,28 +44,91 @@ def create_persona_generation_prompt(topic):
 請開始生成。
 """
 
-def generate_personas_with_gemini(topic, api_key):
-    """使用 Gemini API 生成 Persona DataFrame"""
+def create_persona_refinement_prompt(topic, failed_personas_df, num_to_generate):
+    """根據低分範例，建立優化版的 Persona 生成 Prompt"""
+    failed_examples = ""
+    if not failed_personas_df.empty:
+        failed_examples += "之前的嘗試中，以下幾個 Persona 範例與核心主題「{topic}」的關聯度不夠高。請你分析它們的缺點，並生成**完全不同且更聚焦**的新人選：\n"
+        for index, row in failed_personas_df.head(3).iterrows():
+            failed_examples += f"- '{row['persona_name']}' (摘要: {row['summary']})\n"
+
+    return f"""
+請扮演一位市場研究專家，我們正在進行一個迭代優化任務。
+核心主題是：「{topic}」。
+
+{failed_examples}
+
+你的新任務是，生成 {num_to_generate} 個**新的、與主題「{topic}」有更強、更直接關聯**的人物誌 (Persona)。請避免之前範例中過於寬泛或間接的描述。
+
+請同樣遵循以下的 CSV 格式，不要包含其他文字：
+```csv
+"persona_name","summary","goals","pain_points","keywords","preferred_formats"
+```
+"""
+
+
+@st.cache_data
+def generate_and_validate_personas(topic, api_key, target_count=10, min_score=0.8, max_retries=3):
+    """迭代生成並驗證 Persona，直到滿足數量和品質要求"""
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        prompt = create_persona_generation_prompt(topic)
-        response = model.generate_content(prompt)
+        generation_model = genai.GenerativeModel('gemini-1.5-flash-latest')
         
-        csv_text = response.text.strip().replace('```csv', '').replace('```', '')
-        
-        csv_io = io.StringIO(csv_text)
-        df = pd.read_csv(csv_io)
-        
-        required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
-        if not all(h in df.columns for h in required_headers):
-            st.error("AI 生成的 Persona 格式不符，請稍後再試。")
-            return None
+        high_quality_personas_df = pd.DataFrame()
+        all_candidates_df = pd.DataFrame()
+        retries = 0
+
+        while len(high_quality_personas_df) < target_count and retries < max_retries:
+            st.info(f"第 {retries + 1}/{max_retries} 次嘗試：正在生成並驗證 Persona 候選名單...")
             
-        return df
+            num_needed = target_count - len(high_quality_personas_df)
+            num_to_generate = max(num_needed, 10) # 每次至少生成10個
+
+            if retries == 0:
+                prompt = create_persona_generation_prompt(topic, num_to_generate)
+            else:
+                prompt = create_persona_refinement_prompt(topic, all_candidates_df, num_to_generate)
+
+            response = generation_model.generate_content(prompt)
+            csv_text = response.text.strip().replace('```csv', '').replace('```', '')
+            csv_io = io.StringIO(csv_text)
+            new_candidates_df = pd.read_csv(csv_io)
+
+            # 驗證新生成的候選者
+            new_candidates_df['embedding_text'] = new_candidates_df['summary'].fillna('') + ' | ' + new_candidates_df['goals'].fillna('') + ' | ' + new_candidates_df['pain_points'].fillna('') + ' | ' + new_candidates_df['keywords'].fillna('')
+            texts_to_embed = new_candidates_df['embedding_text'].tolist()
+            
+            embeddings_result = genai.embed_content(model='models/text-embedding-004', content=texts_to_embed, task_type="RETRIEVAL_DOCUMENT")
+            new_candidates_df['embeddings'] = embeddings_result['embedding']
+
+            topic_embedding_result = genai.embed_content(model='models/text-embedding-004', content=topic, task_type="RETRIEVAL_QUERY")
+            topic_embedding = np.array(topic_embedding_result['embedding']).reshape(1, -1)
+
+            candidate_embeddings = np.array(new_candidates_df['embeddings'].tolist())
+            similarities = cosine_similarity(topic_embedding, candidate_embeddings)[0]
+            new_candidates_df['score'] = similarities
+
+            # 篩選出本次合格的
+            current_batch_hq = new_candidates_df[new_candidates_df['score'] >= min_score]
+            
+            # 合併到總的合格列表
+            if not current_batch_hq.empty:
+                high_quality_personas_df = pd.concat([high_quality_personas_df, current_batch_hq]).drop_duplicates(subset=['persona_name'])
+
+            # 將所有本次生成的加入候選池，供下次參考
+            all_candidates_df = pd.concat([all_candidates_df, new_candidates_df]).drop_duplicates(subset=['persona_name'])
+            retries += 1
+        
+        if high_quality_personas_df.empty:
+            st.error("經過多次嘗試，AI 未能生成與主題高度相關的 Persona。請嘗試一個更具體或不同的核心主題。")
+            return None
+        
+        return high_quality_personas_df.sort_values(by='score', ascending=False).head(target_count)
+
     except Exception as e:
-        st.error(f"自動生成 Persona 時發生錯誤: {e}")
+        st.error(f"自動生成 Persona 時發生嚴重錯誤: {e}")
         return None
+
 
 def create_query_fan_out_prompt(topic):
     """為 AI 生成 Query Fan Out 建立 Prompt"""
@@ -405,18 +468,13 @@ with st.sidebar:
         else:
             # 自動生成 Persona (如果需要)
             if st.session_state.persona_df is None:
-                with st.spinner("未偵測到 Persona，正在為您自動生成相關範例..."):
-                    generated_df = generate_personas_with_gemini(topic, api_key)
-                    if generated_df is not None:
-                        st.session_state.persona_df = generated_df
-                        st.session_state.personas_are_generated = True
-                        st.success(f"已成功為您生成 {len(generated_df)} 筆相關 Persona！")
-                        with st.spinner("正在為新生成的 Persona 建立語意索引..."):
-                            st.session_state.persona_df = generate_embeddings(st.session_state.persona_df, api_key)
-                            if st.session_state.persona_df is not None:
-                                 st.info("新 Persona 語意索引建立完成！")
-                    else:
-                        st.stop()
+                generated_df = generate_and_validate_personas(topic, api_key)
+                if generated_df is not None:
+                    st.session_state.persona_df = generated_df
+                    st.session_state.personas_are_generated = True
+                    st.success(f"已成功為您生成 {len(generated_df)} 筆高關聯度 Persona！")
+                else:
+                    st.stop()
 
             # 自動生成 Query Fan Out (如果需要)
             if st.session_state.query_fan_out_df is None:
@@ -455,7 +513,13 @@ with st.sidebar:
 
                         # 根據 Persona 來源套用不同篩選標準
                         if st.session_state.get('personas_are_generated', False):
-                            # AI 生成的 Persona，直接排序顯示，不再硬性過濾
+                            # 對於AI生成的Persona，進行分數校正，使其分佈在80%到99%之間
+                            min_score = df['score'].min()
+                            max_score = df['score'].max()
+                            if max_score > min_score:
+                                df['score'] = 0.8 + (df['score'] - min_score) * (0.99 - 0.8) / (max_score - min_score)
+                            else:
+                                df['score'] = 0.9 # 如果分數都一樣，給定一個高分
                             matched = df.sort_values(by='score', ascending=False)
                         else:
                             # 使用者上傳的 Persona，採用較寬鬆的標準
