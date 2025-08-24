@@ -568,7 +568,7 @@ if st.session_state.matched_personas is not None:
 
     if selected_indices:
         st.markdown("---")
-        if st.button("� 為選定對象生成初步策略", use_container_width=True):
+        if st.button("🚀 為選定對象生成初步策略", use_container_width=True):
             if not st.session_state.api_key_configured:
                 st.error("請在左側側邊欄輸入您的 Gemini API 金鑰。")
             else:
@@ -609,4 +609,3 @@ if st.session_state.matched_personas is not None:
 
 else:
     st.info("請在左側面板完成設定，匹配結果將顯示於此。")
-�
