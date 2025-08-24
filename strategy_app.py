@@ -56,7 +56,6 @@ def generate_and_select_personas(topic, api_key, target_count=10):
         response = generation_model.generate_content(prompt)
         raw_text = response.text.strip()
 
-        # --- 強化 CSV 解析與驗證 ---
         required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
         match = re.search(r'```csv\n(.*?)\n```', raw_text, re.DOTALL)
         if match:
@@ -72,17 +71,13 @@ def generate_and_select_personas(topic, api_key, target_count=10):
         csv_io = io.StringIO(csv_text)
         candidates_df = pd.read_csv(csv_io)
 
-        if not all(h in candidates_df.columns for h in required_headers):
+        if not all(h in candidates_df.columns for h in candidates_df.columns):
             st.error("AI 回應的 CSV 欄位不完整，無法解析 Persona。")
             return None
-        # --- 解析與驗證結束 ---
 
         st.info("正在為候選名單進行語意分析與評分...")
-        candidates_df['embedding_text'] = candidates_df['summary'].fillna('') + ' | ' + candidates_df['goals'].fillna('') + ' | ' + candidates_df['pain_points'].fillna('') + ' | ' + candidates_df['keywords'].fillna('')
-        texts_to_embed = candidates_df['embedding_text'].tolist()
-        
-        embeddings_result = genai.embed_content(model='models/text-embedding-004', content=texts_to_embed, task_type="RETRIEVAL_DOCUMENT")
-        candidates_df['embeddings'] = embeddings_result['embedding']
+        candidates_df = process_and_embed_personas(candidates_df, api_key)
+        if candidates_df is None: return None
 
         topic_embedding_result = genai.embed_content(model='models/text-embedding-004', content=topic, task_type="RETRIEVAL_QUERY")
         topic_embedding = np.array(topic_embedding_result['embedding']).reshape(1, -1)
@@ -91,7 +86,6 @@ def generate_and_select_personas(topic, api_key, target_count=10):
         similarities = cosine_similarity(topic_embedding, candidate_embeddings)[0]
         candidates_df['score'] = similarities
 
-        # 直接選出分數最高的 N 位
         top_personas = candidates_df.sort_values(by='score', ascending=False).head(target_count)
         
         return top_personas
@@ -382,15 +376,19 @@ with st.sidebar:
 
     st.markdown("---")
 
-    st.subheader("1. 上傳 Persona 資料庫 (建議)")
+    st.subheader("1. 輸入核心主題")
+    topic = st.text_input("輸入您想規劃內容的核心主題", placeholder="例如：青少年理財教育")
+
+    st.markdown("---")
+
+    st.subheader("2. Persona 資料")
     uploaded_persona_file = st.file_uploader(
-        "請上傳 Persona CSV 檔案",
+        "上傳 Persona CSV 檔案 (建議)",
         type="csv",
         key="persona_uploader",
-        help="若未上傳，系統將在匹配時根據您的核心主題自動生成範例。"
     )
-
-    if uploaded_persona_file is not None:
+    if uploaded_persona_file:
+        # 當有新檔案上傳時，處理它
         try:
             df = pd.read_csv(uploaded_persona_file)
             required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
@@ -403,30 +401,31 @@ with st.sidebar:
                 st.session_state.persona_df = df
                 st.session_state.personas_are_generated = False
                 st.success(f"成功載入 {len(df)} 筆 Persona 資料！")
-                
-                if st.session_state.api_key_configured:
-                    with st.spinner("正在為 Persona 資料建立語意索引..."):
-                        st.session_state.persona_df = process_and_embed_personas(st.session_state.persona_df, api_key)
-                        if st.session_state.persona_df is not None:
-                             st.info("Persona 語意索引建立完成！")
-                else:
-                    st.warning("請先輸入有效的 API 金鑰以建立 Persona 語意索引。")
-
         except Exception as e:
             st.error(f"Persona 檔案讀取失敗：{e}")
             st.session_state.persona_df = None
     
+    # 如果沒有上傳檔案，且 session state 中也沒有，則顯示生成按鈕
+    if uploaded_persona_file is None and st.session_state.persona_df is None:
+        if st.button("🤖 自動生成 Persona 範例", use_container_width=True):
+            if not st.session_state.api_key_configured or not topic:
+                st.warning("請先輸入 API 金鑰和核心主題。")
+            else:
+                generated_df = generate_and_select_personas(topic, api_key)
+                if generated_df is not None:
+                    st.session_state.persona_df = generated_df
+                    st.session_state.personas_are_generated = True
+                    st.success(f"已成功為您生成 {len(generated_df)} 筆高關聯度 Persona！")
+    
     st.markdown("---")
 
-    st.subheader("2. 上傳 Query Fan Out (選填)")
+    st.subheader("3. Query Fan Out 資料 (選填)")
     uploaded_query_file = st.file_uploader(
-        "請上傳 Query Fan Out CSV 檔案",
+        "上傳 Query Fan Out CSV 檔案",
         type="csv",
         key="query_uploader",
-        help="若未上傳，系統將在匹配時根據您的核心主題自動生成範例。"
     )
-
-    if uploaded_query_file is not None:
+    if uploaded_query_file:
         try:
             df = pd.read_csv(uploaded_query_file)
             required_headers = ['query', 'type', 'user_intent', 'reasoning']
@@ -441,43 +440,34 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Query Fan Out 檔案讀取失敗：{e}")
             st.session_state.query_fan_out_df = None
-
-
-    st.markdown("---")
-
-    st.subheader("3. 輸入核心主題")
-    topic = st.text_input("輸入您想規劃內容的核心主題", placeholder="例如：青少年理財教育")
-
-    if st.button("🔍 語意匹配 Persona", use_container_width=True, type="primary"):
-        if not st.session_state.api_key_configured:
-            st.warning("請先輸入並驗證您的 API 金鑰。")
-        elif not topic:
-            st.warning("請輸入核心主題。")
-        else:
-            # 自動生成 Persona (如果需要)
-            if st.session_state.persona_df is None:
-                generated_df = generate_and_select_personas(topic, api_key)
-                if generated_df is not None:
-                    st.session_state.persona_df = generated_df
-                    st.session_state.personas_are_generated = True
-                    st.success(f"已成功為您生成 {len(generated_df)} 筆高關聯度 Persona！")
-                else:
-                    st.stop()
-
-            # 自動生成 Query Fan Out (如果需要)
-            if st.session_state.query_fan_out_df is None:
-                with st.spinner("未偵測到 Query Fan Out，正在為您自動生成相關查詢..."):
+            
+    if uploaded_query_file is None and st.session_state.query_fan_out_df is None:
+        if st.button("📊 自動生成 Query Fan Out", use_container_width=True):
+            if not st.session_state.api_key_configured or not topic:
+                st.warning("請先輸入 API 金鑰和核心主題。")
+            else:
+                with st.spinner("正在為您自動生成相關查詢..."):
                     generated_qfo_df = generate_query_fan_out_with_gemini(topic, api_key)
                     if generated_qfo_df is not None:
                         st.session_state.query_fan_out_df = generated_qfo_df
                         st.success(f"已成功為您生成 {len(generated_qfo_df)} 筆相關查詢！")
-                    else:
-                        st.warning("自動生成 Query Fan Out 失敗，將僅使用核心主題進行分析。")
 
-            # 檢查 Persona 是否已準備好
-            if st.session_state.persona_df is None or 'embeddings' not in st.session_state.persona_df.columns:
-                 st.warning("Persona 資料尚未準備好或語意索引建立失敗，請重試。")
-            else:
+    st.markdown("---")
+
+    if st.button("🔍 執行策略分析", use_container_width=True, type="primary"):
+        if not st.session_state.api_key_configured:
+            st.warning("請先輸入並驗證您的 API 金鑰。")
+        elif not topic:
+            st.warning("請輸入核心主題。")
+        elif st.session_state.persona_df is None:
+            st.warning("請先上傳或自動生成 Persona 資料。")
+        else:
+            # 確保 Persona 有 embeddings
+            if 'embeddings' not in st.session_state.persona_df.columns:
+                with st.spinner("正在為 Persona 資料建立語意索引..."):
+                    st.session_state.persona_df = process_and_embed_personas(st.session_state.persona_df, api_key)
+            
+            if st.session_state.persona_df is not None:
                 with st.spinner("正在進行語意分析與匹配..."):
                     try:
                         context_text = topic
@@ -499,17 +489,7 @@ with st.sidebar:
                         df = st.session_state.persona_df.copy()
                         df['score'] = similarities
 
-                        # 根據 Persona 來源套用不同篩選標準
-                        if st.session_state.get('personas_are_generated', False):
-                            # 對於AI生成的Persona，分數已在生成時驗證過，直接排序顯示
-                            matched = df.sort_values(by='score', ascending=False)
-                        else:
-                            # 使用者上傳的 Persona，採用較寬鬆的標準
-                            matched = df[df['score'] > 0.5].sort_values(by='score', ascending=False)
-                            if len(matched) < 10 and len(df) > 10:
-                                matched = df.sort_values(by='score', ascending=False).head(10)
-                            elif len(matched) == 0:
-                                 matched = df.sort_values(by='score', ascending=False).head(5)
+                        matched = df.sort_values(by='score', ascending=False).head(10)
 
                         st.session_state.matched_personas = matched
                         st.session_state.strategy_text = None 
