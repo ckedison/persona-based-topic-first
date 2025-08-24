@@ -68,7 +68,7 @@ def create_persona_refinement_prompt(topic, failed_personas_df, num_to_generate)
 
 
 @st.cache_data
-def generate_and_validate_personas(topic, api_key, target_count=10, min_score=0.8, max_retries=3):
+def generate_and_validate_personas(topic, api_key, target_count=10, min_score=0.8, max_retries=5):
     """迭代生成並驗證 Persona，直到滿足數量和品質要求"""
     try:
         genai.configure(api_key=api_key)
