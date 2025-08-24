@@ -452,9 +452,12 @@ with st.sidebar:
                         df = st.session_state.persona_df.copy()
                         df['score'] = similarities
 
+                        # 根據 Persona 來源套用不同篩選標準
                         if st.session_state.get('personas_are_generated', False):
-                            matched = df[df['score'] > 0.9].sort_values(by='score', ascending=False)
+                            # AI 生成的 Persona，直接排序顯示，不再硬性過濾
+                            matched = df.sort_values(by='score', ascending=False)
                         else:
+                            # 使用者上傳的 Persona，採用較寬鬆的標準
                             matched = df[df['score'] > 0.5].sort_values(by='score', ascending=False)
                             if len(matched) < 10 and len(df) > 10:
                                 matched = df.sort_values(by='score', ascending=False).head(10)
@@ -475,7 +478,7 @@ if st.session_state.matched_personas is not None:
     selected_indices = []
     
     if st.session_state.matched_personas.empty:
-        st.warning("找不到符合條件的 Persona。若是 AI 自動生成，代表關聯度均未超過 90%，請嘗試調整核心主題。")
+        st.warning("找不到符合條件的 Persona，請嘗試調整核心主題或檢查上傳的檔案。")
     else:
         for index, row in st.session_state.matched_personas.iterrows():
             cols = st.columns([0.1, 0.7, 0.2])
