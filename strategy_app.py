@@ -45,7 +45,28 @@ def create_persona_generation_prompt(topic, num_to_generate=20):
 請開始生成。
 """
 
-@st.cache_data
+def create_persona_refinement_prompt(topic, failed_personas_df, num_to_generate):
+    """根據低分範例，建立優化版的 Persona 生成 Prompt"""
+    failed_examples = ""
+    if not failed_personas_df.empty:
+        failed_examples += "之前的嘗試中，以下幾個 Persona 範例與核心主題「{topic}」的關聯度不夠高。請你分析它們的缺點，並生成**完全不同且更聚焦**的新人選：\n"
+        for index, row in failed_personas_df.head(3).iterrows():
+            failed_examples += f"- '{row['persona_name']}' (摘要: {row['summary']})\n"
+
+    return f"""
+請扮演一位市場研究專家，我們正在進行一個迭代優化任務。
+核心主題是：「{topic}」。
+
+{failed_examples}
+
+你的新任務是，生成 {num_to_generate} 個**新的、與主題「{topic}」有更強、更直接關聯**的人物誌 (Persona)。請避免之前範例中過於寬泛或間接的描述。
+
+請同樣遵循以下的 CSV 格式，不要包含其他文字：
+```csv
+"persona_name","summary","goals","pain_points","keywords","preferred_formats"
+```
+"""
+
 def generate_and_select_personas(topic, api_key, target_count=10):
     """單批次生成並優選 Persona"""
     try:
@@ -458,7 +479,7 @@ with st.sidebar:
         else:
             # 自動生成 Persona (如果需要)
             if st.session_state.persona_df is None:
-                generated_df = generate_and_validate_personas(topic, api_key)
+                generated_df = generate_and_select_personas(topic, api_key)
                 if generated_df is not None:
                     st.session_state.persona_df = generated_df
                     st.session_state.personas_are_generated = True
