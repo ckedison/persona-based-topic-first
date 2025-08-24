@@ -77,12 +77,14 @@ def generate_and_validate_personas(topic, api_key, target_count=10, min_score=0.
         high_quality_personas_df = pd.DataFrame()
         all_candidates_df = pd.DataFrame()
         retries = 0
+        required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
+
 
         while len(high_quality_personas_df) < target_count and retries < max_retries:
             st.info(f"第 {retries + 1}/{max_retries} 次嘗試：正在生成並驗證 Persona 候選名單...")
             
             num_needed = target_count - len(high_quality_personas_df)
-            num_to_generate = max(num_needed, 10) # 每次至少生成10個
+            num_to_generate = max(num_needed, 10)
 
             if retries == 0:
                 prompt = create_persona_generation_prompt(topic, num_to_generate)
@@ -90,11 +92,27 @@ def generate_and_validate_personas(topic, api_key, target_count=10, min_score=0.
                 prompt = create_persona_refinement_prompt(topic, all_candidates_df, num_to_generate)
 
             response = generation_model.generate_content(prompt)
-            csv_text = response.text.strip().replace('```csv', '').replace('```', '')
+            raw_text = response.text.strip()
+            
+            # --- 強化 CSV 解析與驗證 ---
+            header_str = '"' + '","'.join(required_headers) + '"'
+            csv_start_index = raw_text.find(header_str)
+
+            if csv_start_index == -1:
+                st.warning(f"AI 回應格式不符 (找不到標頭)，正在重試...")
+                retries += 1
+                continue
+
+            csv_text = raw_text[csv_start_index:]
             csv_io = io.StringIO(csv_text)
             new_candidates_df = pd.read_csv(csv_io)
 
-            # 驗證新生成的候選者
+            if not all(h in new_candidates_df.columns for h in required_headers):
+                st.warning(f"AI 回應的 CSV 欄位不完整，正在重試...")
+                retries += 1
+                continue
+            # --- 解析與驗證結束 ---
+
             new_candidates_df['embedding_text'] = new_candidates_df['summary'].fillna('') + ' | ' + new_candidates_df['goals'].fillna('') + ' | ' + new_candidates_df['pain_points'].fillna('') + ' | ' + new_candidates_df['keywords'].fillna('')
             texts_to_embed = new_candidates_df['embedding_text'].tolist()
             
@@ -108,14 +126,11 @@ def generate_and_validate_personas(topic, api_key, target_count=10, min_score=0.
             similarities = cosine_similarity(topic_embedding, candidate_embeddings)[0]
             new_candidates_df['score'] = similarities
 
-            # 篩選出本次合格的
             current_batch_hq = new_candidates_df[new_candidates_df['score'] >= min_score]
             
-            # 合併到總的合格列表
             if not current_batch_hq.empty:
                 high_quality_personas_df = pd.concat([high_quality_personas_df, current_batch_hq]).drop_duplicates(subset=['persona_name'])
 
-            # 將所有本次生成的加入候選池，供下次參考
             all_candidates_df = pd.concat([all_candidates_df, new_candidates_df]).drop_duplicates(subset=['persona_name'])
             retries += 1
         
@@ -513,13 +528,7 @@ with st.sidebar:
 
                         # 根據 Persona 來源套用不同篩選標準
                         if st.session_state.get('personas_are_generated', False):
-                            # 對於AI生成的Persona，進行分數校正，使其分佈在80%到99%之間
-                            min_score = df['score'].min()
-                            max_score = df['score'].max()
-                            if max_score > min_score:
-                                df['score'] = 0.8 + (df['score'] - min_score) * (0.99 - 0.8) / (max_score - min_score)
-                            else:
-                                df['score'] = 0.9 # 如果分數都一樣，給定一個高分
+                            # 對於AI生成的Persona，分數已在生成時驗證過，直接排序顯示
                             matched = df.sort_values(by='score', ascending=False)
                         else:
                             # 使用者上傳的 Persona，採用較寬鬆的標準
@@ -559,7 +568,7 @@ if st.session_state.matched_personas is not None:
 
     if selected_indices:
         st.markdown("---")
-        if st.button("🚀 為選定對象生成初步策略", use_container_width=True):
+        if st.button("� 為選定對象生成初步策略", use_container_width=True):
             if not st.session_state.api_key_configured:
                 st.error("請在左側側邊欄輸入您的 Gemini API 金鑰。")
             else:
@@ -600,3 +609,4 @@ if st.session_state.matched_personas is not None:
 
 else:
     st.info("請在左側面板完成設定，匹配結果將顯示於此。")
+�
