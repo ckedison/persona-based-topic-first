@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import google.generativeai as genai
@@ -396,7 +397,7 @@ with st.sidebar:
     st.subheader("3. 輸入核心主題")
     topic = st.text_input("輸入您想規劃內容的核心主題", placeholder="例如：青少年理財教育")
 
-    if st.button("� 語意匹配 Persona", use_container_width=True, type="primary"):
+    if st.button("🔍 語意匹配 Persona", use_container_width=True, type="primary"):
         if not st.session_state.api_key_configured:
             st.warning("請先輸入並驗證您的 API 金鑰。")
         elif not topic:
@@ -535,4 +536,3 @@ if st.session_state.matched_personas is not None:
 
 else:
     st.info("請在左側面板完成設定，匹配結果將顯示於此。")
-�
