@@ -80,6 +80,7 @@ def generate_and_validate_personas(topic, api_key, target_count=10, min_score=0.
         retries = 0
         required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
 
+
         while len(high_quality_personas_df) < target_count and retries < max_retries:
             st.info(f"第 {retries + 1}/{max_retries} 次嘗試：正在生成並驗證 Persona 候選名單...")
             
@@ -99,7 +100,6 @@ def generate_and_validate_personas(topic, api_key, target_count=10, min_score=0.
             if match:
                 csv_text = match.group(1)
             else:
-                # 如果找不到 markdown 區塊，就從標頭開始找
                 header_str = '"' + '","'.join(required_headers) + '"'
                 csv_start_index = raw_text.find(header_str)
                 if csv_start_index == -1:
@@ -138,7 +138,6 @@ def generate_and_validate_personas(topic, api_key, target_count=10, min_score=0.
             all_candidates_df = pd.concat([all_candidates_df, new_candidates_df]).drop_duplicates(subset=['persona_name'])
             retries += 1
         
-        # --- 備案機制 ---
         if high_quality_personas_df.empty:
             st.warning("經過多次嘗試，未能找到足夠數量關聯度 >80% 的 Persona。現為您呈現最相關的候選結果。")
             if not all_candidates_df.empty:
@@ -306,6 +305,24 @@ def create_dynamic_prompt(topic, selected_personas_df, query_fan_out_df=None):
 {idea_structure}
 
 請確保所有產出的點子都**高度聚焦**在核心主題與 Persona 需求的交集上，避免提出泛泛之論。
+
+---
+
+### **總結：內容產製清單 (Content Production Checklist)**
+
+現在，請扮演一位**內容製作總監**。請回顧以上**所有**為不同 Persona 生成的內容點子，並將它們整合成一個清晰的總表。
+
+這個表格的目的是讓團隊一目了然地知道總共需要製作哪些類型的內容，以及每個類型有哪些具體的點子。
+
+請遵循以下表格格式，將**相似的「建議格式」**的點子歸類在一起：
+
+| 內容格式 (Media Format) | 主題/標題方向 (Topic/Title Ideas) |
+| :--- | :--- |
+| **[例如：YouTube 深度影片]** | - [標題方向A]<br>- [標題方向B]<br>- [標題方向C] |
+| **[例如：Podcast]** | - [標題方向D]<br>- [標題方向E] |
+| **[例如：IG 圖文卡]** | - [標題方向F] |
+
+請確保表格完整涵蓋了前面提到的所有點子。
 """
 
 
