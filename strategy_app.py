@@ -150,7 +150,7 @@ def generate_query_fan_out_with_gemini(topic, api_key):
         st.error(f"自動生成 Query Fan Out 時發生錯誤: {e}")
         return None
 
-def generate_embeddings(df, api_key):
+def process_and_embed_personas(df, api_key):
     """為 Persona DataFrame 生成 Embeddings"""
     try:
         genai.configure(api_key=api_key)
@@ -406,7 +406,7 @@ with st.sidebar:
                 
                 if st.session_state.api_key_configured:
                     with st.spinner("正在為 Persona 資料建立語意索引..."):
-                        st.session_state.persona_df = generate_embeddings(st.session_state.persona_df, api_key)
+                        st.session_state.persona_df = process_and_embed_personas(st.session_state.persona_df, api_key)
                         if st.session_state.persona_df is not None:
                              st.info("Persona 語意索引建立完成！")
                 else:
