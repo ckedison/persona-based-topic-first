@@ -15,6 +15,57 @@ st.set_page_config(
 
 # --- 核心功能函式 ---
 
+def create_persona_generation_prompt(topic):
+    """為 AI 生成 Persona 建立 Prompt"""
+    return f"""
+請扮演一位頂尖的市場研究與用戶體驗專家。
+我的核心產品/服務主題是：「{topic}」。
+
+你的任務是為這個主題生成 10 個**高度相關且具體**的潛在目標人物誌 (Persona)。
+
+請嚴格遵循以下 CSV 格式輸出，包含標頭，並且不要有任何其他的開頭或結尾文字。每一筆資料的欄位內容請用雙引號 `"` 包覆，以避免格式錯誤。
+
+```csv
+"persona_name","summary","goals","pain_points","keywords","preferred_formats"
+"範例人物誌1","範例摘要1","範例目標1","範例痛點1","關鍵字1,關鍵字2","格式1,格式2"
+"範例人物誌2","範例摘要2","範例目標2","範例痛點2","關鍵字3,關鍵字4","格式3,格式4"
+... (直到第10筆)
+```
+
+**生成指南:**
+- **persona_name:** 給一個具體且有代表性的名字 (例如: 焦慮的新手媽媽 怡君)。
+- **summary:** 一句話總結這個 Persona 的核心特徵。
+- **goals:** 他們在使用與「{topic}」相關的產品/服務時，最想達成的 2-3 個目標。
+- **pain_points:** 他們在「{topic}」這個領域遇到的 2-3 個主要困難或煩惱。
+- **keywords:** 他們可能會用來搜尋相關資訊的 3-5 個關鍵字。
+- **preferred_formats:** 他們最喜歡用來接收資訊的 3-4 種內容格式 (例如: Podcast, IG圖文卡, 深度文章, 線上課程, YouTube影片, 研究報告, 線下活動等)。
+
+請開始生成。
+"""
+
+def generate_personas_with_gemini(topic, api_key):
+    """使用 Gemini API 生成 Persona DataFrame"""
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        prompt = create_persona_generation_prompt(topic)
+        response = model.generate_content(prompt)
+        
+        csv_text = response.text.strip().replace('```csv', '').replace('```', '')
+        
+        csv_io = io.StringIO(csv_text)
+        df = pd.read_csv(csv_io)
+        
+        required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
+        if not all(h in df.columns for h in required_headers):
+            st.error("AI 生成的 Persona 格式不符，請稍後再試。")
+            return None
+            
+        return df
+    except Exception as e:
+        st.error(f"自動生成 Persona 時發生錯誤: {e}")
+        return None
+
 @st.cache_data
 def generate_embeddings(_df, api_key):
     """為 Persona DataFrame 生成 Embeddings 並快取"""
@@ -207,12 +258,12 @@ with st.sidebar:
 
     st.markdown("---")
 
-    st.subheader("1. 上傳 Persona 資料庫")
+    st.subheader("1. 上傳 Persona 資料庫 (建議)")
     uploaded_persona_file = st.file_uploader(
         "請上傳 Persona CSV 檔案",
         type="csv",
         key="persona_uploader",
-        help="檔案需包含 `persona_name`, `summary`, `goals`, `pain_points`, `keywords`, `preferred_formats` 欄位。"
+        help="若未上傳，系統將在匹配時根據您的核心主題自動生成範例。"
     )
 
     if uploaded_persona_file is not None:
@@ -275,43 +326,57 @@ with st.sidebar:
     if st.button("🔍 語意匹配 Persona", use_container_width=True, type="primary"):
         if not st.session_state.api_key_configured:
             st.warning("請先輸入並驗證您的 API 金鑰。")
-        elif st.session_state.persona_df is None or 'embeddings' not in st.session_state.persona_df.columns:
-            st.warning("請先上傳 Persona 資料庫並等待語意索引建立完成。")
         elif not topic:
             st.warning("請輸入核心主題。")
         else:
-            with st.spinner("正在進行語意分析與匹配..."):
-                try:
-                    # 建立用於匹配的上下文
-                    context_text = topic
-                    if st.session_state.query_fan_out_df is not None:
-                        queries = " ".join(st.session_state.query_fan_out_df['query'].fillna(''))
-                        intents = " ".join(st.session_state.query_fan_out_df['user_intent'].fillna(''))
-                        context_text = f"{topic} - 相關查詢與意圖: {queries} {intents}"
+            # 如果沒有上傳 Persona，則自動生成
+            if st.session_state.persona_df is None:
+                with st.spinner("未偵測到 Persona，正在為您自動生成相關範例..."):
+                    generated_df = generate_personas_with_gemini(topic, api_key)
+                    if generated_df is not None:
+                        st.session_state.persona_df = generated_df
+                        st.success(f"已成功為您生成 {len(generated_df)} 筆相關 Persona！")
+                        with st.spinner("正在為新生成的 Persona 建立語意索引..."):
+                            st.session_state.persona_df = generate_embeddings(st.session_state.persona_df, api_key)
+                            if st.session_state.persona_df is not None:
+                                 st.info("新 Persona 語意索引建立完成！")
+                    else:
+                        st.stop() # 如果生成失敗，則停止執行
 
-                    context_embedding_result = genai.embed_content(
-                        model='models/text-embedding-004',
-                        content=context_text,
-                        task_type="RETRIEVAL_QUERY"
-                    )
-                    context_embedding = np.array(context_embedding_result['embedding']).reshape(1, -1)
-                    
-                    persona_embeddings = np.array(st.session_state.persona_df['embeddings'].tolist())
-                    similarities = cosine_similarity(context_embedding, persona_embeddings)[0]
-                    
-                    df = st.session_state.persona_df.copy()
-                    df['score'] = similarities
-                    matched = df[df['score'] > 0.5].sort_values(by='score', ascending=False)
-                    if len(matched) < 10 and len(df) > 10:
-                        matched = df.sort_values(by='score', ascending=False).head(10)
-                    elif len(matched) == 0:
-                         matched = df.sort_values(by='score', ascending=False).head(5)
+            # 檢查 Persona 是否已準備好
+            if st.session_state.persona_df is None or 'embeddings' not in st.session_state.persona_df.columns:
+                 st.warning("Persona 資料尚未準備好或語意索引建立失敗，請重試。")
+            else:
+                with st.spinner("正在進行語意分析與匹配..."):
+                    try:
+                        context_text = topic
+                        if st.session_state.query_fan_out_df is not None:
+                            queries = " ".join(st.session_state.query_fan_out_df['query'].fillna(''))
+                            intents = " ".join(st.session_state.query_fan_out_df['user_intent'].fillna(''))
+                            context_text = f"{topic} - 相關查詢與意圖: {queries} {intents}"
 
+                        context_embedding_result = genai.embed_content(
+                            model='models/text-embedding-004',
+                            content=context_text,
+                            task_type="RETRIEVAL_QUERY"
+                        )
+                        context_embedding = np.array(context_embedding_result['embedding']).reshape(1, -1)
+                        
+                        persona_embeddings = np.array(st.session_state.persona_df['embeddings'].tolist())
+                        similarities = cosine_similarity(context_embedding, persona_embeddings)[0]
+                        
+                        df = st.session_state.persona_df.copy()
+                        df['score'] = similarities
+                        matched = df[df['score'] > 0.5].sort_values(by='score', ascending=False)
+                        if len(matched) < 10 and len(df) > 10:
+                            matched = df.sort_values(by='score', ascending=False).head(10)
+                        elif len(matched) == 0:
+                             matched = df.sort_values(by='score', ascending=False).head(5)
 
-                    st.session_state.matched_personas = matched
-                    st.session_state.strategy_text = None 
-                except Exception as e:
-                    st.error(f"語意匹配時發生錯誤: {e}")
+                        st.session_state.matched_personas = matched
+                        st.session_state.strategy_text = None 
+                    except Exception as e:
+                        st.error(f"語意匹配時發生錯誤: {e}")
 
 # 主畫面
 if st.session_state.matched_personas is not None:
