@@ -66,6 +66,55 @@ def generate_personas_with_gemini(topic, api_key):
         st.error(f"自動生成 Persona 時發生錯誤: {e}")
         return None
 
+def create_query_fan_out_prompt(topic):
+    """為 AI 生成 Query Fan Out 建立 Prompt"""
+    return f"""
+請扮演一位資深的 SEO 與內容策略專家。
+我的核心主題是：「{topic}」。
+
+你的任務是為這個主題進行「Query Fan Out」分析，生成 15 個用戶可能會搜尋的相關查詢 (Query)。
+
+請嚴格遵循以下 CSV 格式輸出，包含標頭，並且不要有任何其他的開頭或結尾文字。每一筆資料的欄位內容請用雙引號 `"` 包覆，以避免格式錯誤。
+
+```csv
+"query","type","user_intent","reasoning"
+"範例查詢1","範例類型1","範例意圖1","範例理由1"
+"範例查詢2","範例類型2","範例意圖2","範例理由2"
+... (直到第15筆)
+```
+
+**生成指南:**
+- **query:** 具體的用戶搜尋字詞。
+- **type:** 查詢的類型，請從以下選項中選擇：[問題 (Question), 比較 (Comparison), 資訊 (Informational), 商業 (Commercial), 導航 (Navigational)]。
+- **user_intent:** 總結用戶進行此搜尋背後的真實意圖。
+- **reasoning:** 簡要說明為什麼這個查詢與核心主題「{topic}」相關。
+
+請確保生成的查詢涵蓋不同的類型與用戶意圖，以展現主題的全貌。請開始生成。
+"""
+
+def generate_query_fan_out_with_gemini(topic, api_key):
+    """使用 Gemini API 生成 Query Fan Out DataFrame"""
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        prompt = create_query_fan_out_prompt(topic)
+        response = model.generate_content(prompt)
+        
+        csv_text = response.text.strip().replace('```csv', '').replace('```', '')
+        
+        csv_io = io.StringIO(csv_text)
+        df = pd.read_csv(csv_io)
+        
+        required_headers = ['query', 'type', 'user_intent', 'reasoning']
+        if not all(h in df.columns for h in required_headers):
+            st.error("AI 生成的 Query Fan Out 格式不符，請稍後再試。")
+            return None
+            
+        return df
+    except Exception as e:
+        st.error(f"自動生成 Query Fan Out 時發生錯誤: {e}")
+        return None
+
 @st.cache_data
 def generate_embeddings(_df, api_key):
     """為 Persona DataFrame 生成 Embeddings 並快取"""
@@ -102,12 +151,42 @@ def create_dynamic_prompt(topic, selected_personas_df, query_fan_out_df=None):
 """
 
     query_fan_out_section = ""
+    idea_format_instruction = ""
+    idea_structure = ""
+
     if query_fan_out_df is not None and not query_fan_out_df.empty:
         query_fan_out_section = f"""
 另外，請務必參考以下由 SEO 專家分析的「Query Fan Out」資料，這代表了用戶在搜尋此主題時的真實意圖與變化：
 ```
 {query_fan_out_df.to_markdown(index=False)}
 ```
+"""
+        idea_format_instruction = """(請提供 3-5 個**緊扣上述「連結分析」**的具體內容點子。**每一個點子都必須明確對應到 Query Fan Out 資料中一個具體的 'query' 或 'user_intent'**。每一個點子都必須包含「主題/標題方向」、「對應的用戶查詢」、「建議格式」和「理由」。)"""
+        idea_structure = """
+* **點子一：**
+    * **主題/標題方向:** [一個能直接反映「連結分析」的具體標題]
+    * **對應的用戶查詢:** [從 Query Fan Out 中選擇一個最相關的 query/intent]
+    * **建議格式:** [從 Persona 偏好格式中挑選]
+    * **理由:** [說明為什麼這個點子和格式能有效**回應對應的用戶查詢**並解決 Persona 的問題]
+
+* **點子二：**
+    * **主題/標題方向:** [一個能直接反映「連結分析」的具體標題]
+    * **對應的用戶查詢:** [從 Query Fan Out 中選擇一個最相關的 query/intent]
+    * **建議格式:** [從 Persona 偏好格式中挑選]
+    * **理由:** [說明為什麼這個點子和格式能有效**回應對應的用戶查詢**並解決 Persona 的問題]
+"""
+    else:
+        idea_format_instruction = """(請提供 3-5 個**緊扣上述「連結分析」**的具體內容點子。每一個點子都必須包含「主題/標題方向」、「建議格式」和「理由」。)"""
+        idea_structure = """
+* **點子一：**
+    * **主題/標題方向:** [一個能直接反映「連結分析」的具體標題]
+    * **建議格式:** [從 Persona 偏好格式中挑選]
+    * **理由:** [說明為什麼這個點子和格式能有效解決 Persona 在此主題下的特定問題]
+
+* **點子二：**
+    * **主題/標題方向:** [一個能直接反映「連結分析」的具體標題]
+    * **建議格式:** [從 Persona 偏好格式中挑選]
+    * **理由:** [說明為什麼這個點子和格式能有效解決 Persona 在此主題下的特定問題]
 """
 
     return f"""
@@ -135,17 +214,8 @@ def create_dynamic_prompt(topic, selected_personas_df, query_fan_out_df=None):
 (基於以上的連結分析，總結出一個最能打動此 Persona 的核心溝通切角。)
 
 **3. 內容點子與格式建議 (Content Ideas & Formats):**
-(請提供 3-5 個**緊扣上述「連結分析」**並**回應「Query Fan Out」意圖**的具體內容點子。每一個點子都必須包含「主題/標題方向」、「建議格式」和「理由」。)
-
-* **點子一：**
-    * **主題/標題方向:** [一個能直接反映「連結分析」的具體標題]
-    * **建議格式:** [從 Persona 偏好格式中挑選]
-    * **理由:** [說明為什麼這個點子和格式能有效解決 Persona 在此主題下的特定問題]
-
-* **點子二：**
-    * **主題/標題方向:** [一個能直接反映「連結分析」的具體標題]
-    * **建議格式:** [從 Persona 偏好格式中挑選]
-    * **理由:** [說明為什麼這個點子和格式能有效解決 Persona 在此主題下的特定問題]
+{idea_format_instruction}
+{idea_structure}
 
 請確保所有產出的點子都**高度聚焦**在核心主題與 Persona 需求的交集上，避免提出泛泛之論。
 """
@@ -235,6 +305,8 @@ if 'api_key_configured' not in st.session_state:
     st.session_state.api_key_configured = False
 if 'strategy_text' not in st.session_state:
     st.session_state.strategy_text = None
+if 'personas_are_generated' not in st.session_state:
+    st.session_state.personas_are_generated = False
 
 
 # --- Streamlit 介面佈局 ---
@@ -277,6 +349,7 @@ with st.sidebar:
                 st.session_state.persona_df = None
             else:
                 st.session_state.persona_df = df
+                st.session_state.personas_are_generated = False
                 st.success(f"成功載入 {len(df)} 筆 Persona 資料！")
                 
                 if st.session_state.api_key_configured:
@@ -293,12 +366,12 @@ with st.sidebar:
     
     st.markdown("---")
 
-    st.subheader("2. (選填) 上傳 Query Fan Out")
+    st.subheader("2. 上傳 Query Fan Out (選填)")
     uploaded_query_file = st.file_uploader(
         "請上傳 Query Fan Out CSV 檔案",
         type="csv",
         key="query_uploader",
-        help="檔案需包含 `query`, `type`, `user_intent`, `reasoning` 欄位。"
+        help="若未上傳，系統將在匹配時根據您的核心主題自動生成範例。"
     )
 
     if uploaded_query_file is not None:
@@ -329,19 +402,30 @@ with st.sidebar:
         elif not topic:
             st.warning("請輸入核心主題。")
         else:
-            # 如果沒有上傳 Persona，則自動生成
+            # 自動生成 Persona (如果需要)
             if st.session_state.persona_df is None:
                 with st.spinner("未偵測到 Persona，正在為您自動生成相關範例..."):
                     generated_df = generate_personas_with_gemini(topic, api_key)
                     if generated_df is not None:
                         st.session_state.persona_df = generated_df
+                        st.session_state.personas_are_generated = True
                         st.success(f"已成功為您生成 {len(generated_df)} 筆相關 Persona！")
                         with st.spinner("正在為新生成的 Persona 建立語意索引..."):
                             st.session_state.persona_df = generate_embeddings(st.session_state.persona_df, api_key)
                             if st.session_state.persona_df is not None:
                                  st.info("新 Persona 語意索引建立完成！")
                     else:
-                        st.stop() # 如果生成失敗，則停止執行
+                        st.stop()
+
+            # 自動生成 Query Fan Out (如果需要)
+            if st.session_state.query_fan_out_df is None:
+                with st.spinner("未偵測到 Query Fan Out，正在為您自動生成相關查詢..."):
+                    generated_qfo_df = generate_query_fan_out_with_gemini(topic, api_key)
+                    if generated_qfo_df is not None:
+                        st.session_state.query_fan_out_df = generated_qfo_df
+                        st.success(f"已成功為您生成 {len(generated_qfo_df)} 筆相關查詢！")
+                    else:
+                        st.warning("自動生成 Query Fan Out 失敗，將僅使用核心主題進行分析。")
 
             # 檢查 Persona 是否已準備好
             if st.session_state.persona_df is None or 'embeddings' not in st.session_state.persona_df.columns:
@@ -367,11 +451,15 @@ with st.sidebar:
                         
                         df = st.session_state.persona_df.copy()
                         df['score'] = similarities
-                        matched = df[df['score'] > 0.5].sort_values(by='score', ascending=False)
-                        if len(matched) < 10 and len(df) > 10:
-                            matched = df.sort_values(by='score', ascending=False).head(10)
-                        elif len(matched) == 0:
-                             matched = df.sort_values(by='score', ascending=False).head(5)
+
+                        if st.session_state.get('personas_are_generated', False):
+                            matched = df[df['score'] > 0.9].sort_values(by='score', ascending=False)
+                        else:
+                            matched = df[df['score'] > 0.5].sort_values(by='score', ascending=False)
+                            if len(matched) < 10 and len(df) > 10:
+                                matched = df.sort_values(by='score', ascending=False).head(10)
+                            elif len(matched) == 0:
+                                 matched = df.sort_values(by='score', ascending=False).head(5)
 
                         st.session_state.matched_personas = matched
                         st.session_state.strategy_text = None 
@@ -386,17 +474,20 @@ if st.session_state.matched_personas is not None:
 
     selected_indices = []
     
-    for index, row in st.session_state.matched_personas.iterrows():
-        cols = st.columns([0.1, 0.7, 0.2])
-        with cols[0]:
-            is_selected = st.checkbox("", key=f"persona_{index}")
-            if is_selected:
-                selected_indices.append(index)
-        with cols[1]:
-            st.markdown(f"**{row['persona_name']}**")
-            st.caption(row['summary'])
-        with cols[2]:
-            st.info(f"關聯度: {row['score']:.0%}")
+    if st.session_state.matched_personas.empty:
+        st.warning("找不到符合條件的 Persona。若是 AI 自動生成，代表關聯度均未超過 90%，請嘗試調整核心主題。")
+    else:
+        for index, row in st.session_state.matched_personas.iterrows():
+            cols = st.columns([0.1, 0.7, 0.2])
+            with cols[0]:
+                is_selected = st.checkbox("", key=f"persona_{index}")
+                if is_selected:
+                    selected_indices.append(index)
+            with cols[1]:
+                st.markdown(f"**{row['persona_name']}**")
+                st.caption(row['summary'])
+            with cols[2]:
+                st.info(f"關聯度: {row['score']:.0%}")
 
     if selected_indices:
         st.markdown("---")
