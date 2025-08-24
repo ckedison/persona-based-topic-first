@@ -20,7 +20,6 @@ def generate_embeddings(_df, api_key):
     """為 Persona DataFrame 生成 Embeddings 並快取"""
     try:
         genai.configure(api_key=api_key)
-        # 組合用於生成 embedding 的文字
         _df['embedding_text'] = _df['summary'].fillna('') + ' | ' + \
                                _df['goals'].fillna('') + ' | ' + \
                                _df['pain_points'].fillna('') + ' | ' + \
@@ -28,7 +27,6 @@ def generate_embeddings(_df, api_key):
         
         texts_to_embed = _df['embedding_text'].tolist()
         
-        # 使用 text-embedding-004 模型
         result = genai.embed_content(
             model='models/text-embedding-004',
             content=texts_to_embed,
@@ -40,7 +38,7 @@ def generate_embeddings(_df, api_key):
         st.error(f"生成 Persona Embeddings 時發生錯誤: {e}")
         return None
 
-def create_dynamic_prompt(topic, selected_personas_df):
+def create_dynamic_prompt(topic, selected_personas_df, query_fan_out_df=None):
     """根據主題和選擇的 Persona 動態生成 Prompt (優化版)"""
     persona_details = ""
     for index, row in selected_personas_df.iterrows():
@@ -52,16 +50,26 @@ def create_dynamic_prompt(topic, selected_personas_df):
 - **偏好內容格式:** {row.get('preferred_formats', '無')}
 """
 
+    query_fan_out_section = ""
+    if query_fan_out_df is not None and not query_fan_out_df.empty:
+        query_fan_out_section = f"""
+另外，請務必參考以下由 SEO 專家分析的「Query Fan Out」資料，這代表了用戶在搜尋此主題時的真實意圖與變化：
+```
+{query_fan_out_df.to_markdown(index=False)}
+```
+"""
+
     return f"""
 請扮演一位頂尖的內容策略顧問，擁有敏銳的用戶洞察力。
 我的核心主題是：「{topic}」。
 
 你的任務是為以下的人物誌 (Persona) 規劃一份**高度相關且具體**的內容策略。
+{query_fan_out_section}
 
 這是我要你分析的人物誌資料：
 {persona_details}
 
-請為 **每一個** 人物誌提供一份獨立的策略建議。在規劃時，你必須深度思考「核心主題」與「Persona 的痛點/目標」之間的**交集**，並以此交集作為所有內容點子的出發點。
+請為 **每一個** 人物誌提供一份獨立的策略建議。在規劃時，你必須深度思考「核心主題」、「Query Fan Out (如果提供)」與「Persona 的痛點/目標」之間的**交集**，並以此交集作為所有內容點子的出發點。
 
 請嚴格遵循以下格式輸出，使用 Markdown 語法：
 
@@ -76,7 +84,7 @@ def create_dynamic_prompt(topic, selected_personas_df):
 (基於以上的連結分析，總結出一個最能打動此 Persona 的核心溝通切角。)
 
 **3. 內容點子與格式建議 (Content Ideas & Formats):**
-(請提供 3-5 個**緊扣上述「連結分析」**的具體內容點子。每一個點子都必須包含「主題/標題方向」、「建議格式」和「理由」。)
+(請提供 3-5 個**緊扣上述「連結分析」**並**回應「Query Fan Out」意圖**的具體內容點子。每一個點子都必須包含「主題/標題方向」、「建議格式」和「理由」。)
 
 * **點子一：**
     * **主題/標題方向:** [一個能直接反映「連結分析」的具體標題]
@@ -92,11 +100,21 @@ def create_dynamic_prompt(topic, selected_personas_df):
 """
 
 
-def create_funnel_prompt(topic, strategy_text):
+def create_funnel_prompt(topic, strategy_text, query_fan_out_df=None):
     """根據初步策略生成行銷漏斗策略的 Prompt"""
+    query_fan_out_section = ""
+    if query_fan_out_df is not None and not query_fan_out_df.empty:
+        query_fan_out_section = f"""
+在規劃時，請優先考慮以下「Query Fan Out」資料中，具有高商業意圖或能解決深度問題的查詢，將其融入你的漏斗策略中：
+```
+{query_fan_out_df.to_markdown(index=False)}
+```
+"""
+
     return f"""
 請扮演一位頂尖的數位行銷策略總監 (Head of Digital Strategy)，專精於設計高轉換率的內容行銷漏斗。
 我的核心主題是：「{topic}」。
+{query_fan_out_section}
 
 這是一份由 AI 內容策略顧問針對不同 Persona 生成的初步內容點子清單：
 ```markdown
@@ -158,6 +176,8 @@ def create_funnel_prompt(topic, strategy_text):
 # --- 初始化 Session State ---
 if 'persona_df' not in st.session_state:
     st.session_state.persona_df = None
+if 'query_fan_out_df' not in st.session_state:
+    st.session_state.query_fan_out_df = None
 if 'matched_personas' not in st.session_state:
     st.session_state.matched_personas = None
 if 'api_key_configured' not in st.session_state:
@@ -168,15 +188,12 @@ if 'strategy_text' not in st.session_state:
 
 # --- Streamlit 介面佈局 ---
 
-# 標題
 st.title("🎯 互動式策略儀表板 (語意分析版)")
 st.markdown("上傳您的 Persona，讓 AI 理解語意並為您打造主題優先的內容策略")
 
-# 側邊欄 (控制面板)
 with st.sidebar:
     st.header("⚙️ 設定面板")
 
-    # API 金鑰輸入
     api_key = st.text_input("請輸入您的 Gemini API 金鑰", type="password", help="[點此取得您的 API 金鑰](https://aistudio.google.com/app/apikey)")
 
     if api_key:
@@ -188,25 +205,24 @@ with st.sidebar:
             st.error(f"API 金鑰設定失敗: {e}")
             st.session_state.api_key_configured = False
 
-
     st.markdown("---")
 
-    # 步驟一：上傳檔案
     st.subheader("1. 上傳 Persona 資料庫")
-    uploaded_file = st.file_uploader(
-        "請上傳 CSV 檔案",
+    uploaded_persona_file = st.file_uploader(
+        "請上傳 Persona CSV 檔案",
         type="csv",
+        key="persona_uploader",
         help="檔案需包含 `persona_name`, `summary`, `goals`, `pain_points`, `keywords`, `preferred_formats` 欄位。"
     )
 
-    if uploaded_file is not None:
+    if uploaded_persona_file is not None:
         try:
-            df = pd.read_csv(uploaded_file)
+            df = pd.read_csv(uploaded_persona_file)
             required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
             missing_headers = [h for h in required_headers if h not in df.columns]
 
             if missing_headers:
-                st.error(f"CSV 檔案缺少必要欄位: {', '.join(missing_headers)}")
+                st.error(f"Persona CSV 檔案缺少欄位: {', '.join(missing_headers)}")
                 st.session_state.persona_df = None
             else:
                 st.session_state.persona_df = df
@@ -216,21 +232,46 @@ with st.sidebar:
                     with st.spinner("正在為 Persona 資料建立語意索引..."):
                         st.session_state.persona_df = generate_embeddings(st.session_state.persona_df, api_key)
                         if st.session_state.persona_df is not None:
-                             st.info("語意索引建立完成！")
+                             st.info("Persona 語意索引建立完成！")
                 else:
-                    st.warning("請先輸入有效的 API 金鑰以建立語意索引。")
+                    st.warning("請先輸入有效的 API 金鑰以建立 Persona 語意索引。")
 
         except Exception as e:
-            st.error(f"檔案讀取失敗：{e}")
+            st.error(f"Persona 檔案讀取失敗：{e}")
             st.session_state.persona_df = None
+    
+    st.markdown("---")
+
+    st.subheader("2. (選填) 上傳 Query Fan Out")
+    uploaded_query_file = st.file_uploader(
+        "請上傳 Query Fan Out CSV 檔案",
+        type="csv",
+        key="query_uploader",
+        help="檔案需包含 `query`, `type`, `user_intent`, `reasoning` 欄位。"
+    )
+
+    if uploaded_query_file is not None:
+        try:
+            df = pd.read_csv(uploaded_query_file)
+            required_headers = ['query', 'type', 'user_intent', 'reasoning']
+            missing_headers = [h for h in required_headers if h not in df.columns]
+
+            if missing_headers:
+                st.error(f"Query Fan Out CSV 檔案缺少欄位: {', '.join(missing_headers)}")
+                st.session_state.query_fan_out_df = None
+            else:
+                st.session_state.query_fan_out_df = df
+                st.success(f"成功載入 {len(df)} 筆 Query Fan Out 資料！")
+        except Exception as e:
+            st.error(f"Query Fan Out 檔案讀取失敗：{e}")
+            st.session_state.query_fan_out_df = None
+
 
     st.markdown("---")
 
-    # 步驟二：輸入主題
-    st.subheader("2. 輸入核心主題")
+    st.subheader("3. 輸入核心主題")
     topic = st.text_input("輸入您想規劃內容的核心主題", placeholder="例如：青少年理財教育")
 
-    # 匹配按鈕
     if st.button("🔍 語意匹配 Persona", use_container_width=True, type="primary"):
         if not st.session_state.api_key_configured:
             st.warning("請先輸入並驗證您的 API 金鑰。")
@@ -241,34 +282,42 @@ with st.sidebar:
         else:
             with st.spinner("正在進行語意分析與匹配..."):
                 try:
-                    topic_embedding_result = genai.embed_content(
+                    # 建立用於匹配的上下文
+                    context_text = topic
+                    if st.session_state.query_fan_out_df is not None:
+                        queries = " ".join(st.session_state.query_fan_out_df['query'].fillna(''))
+                        intents = " ".join(st.session_state.query_fan_out_df['user_intent'].fillna(''))
+                        context_text = f"{topic} - 相關查詢與意圖: {queries} {intents}"
+
+                    context_embedding_result = genai.embed_content(
                         model='models/text-embedding-004',
-                        content=topic,
+                        content=context_text,
                         task_type="RETRIEVAL_QUERY"
                     )
-                    topic_embedding = np.array(topic_embedding_result['embedding']).reshape(1, -1)
+                    context_embedding = np.array(context_embedding_result['embedding']).reshape(1, -1)
                     
                     persona_embeddings = np.array(st.session_state.persona_df['embeddings'].tolist())
-                    similarities = cosine_similarity(topic_embedding, persona_embeddings)[0]
+                    similarities = cosine_similarity(context_embedding, persona_embeddings)[0]
                     
                     df = st.session_state.persona_df.copy()
                     df['score'] = similarities
                     matched = df[df['score'] > 0.5].sort_values(by='score', ascending=False)
-                    if len(matched) < 10:
+                    if len(matched) < 10 and len(df) > 10:
                         matched = df.sort_values(by='score', ascending=False).head(10)
+                    elif len(matched) == 0:
+                         matched = df.sort_values(by='score', ascending=False).head(5)
+
 
                     st.session_state.matched_personas = matched
-                    # 重置後續步驟的狀態
                     st.session_state.strategy_text = None 
                 except Exception as e:
                     st.error(f"語意匹配時發生錯誤: {e}")
 
-
-# 主畫面 (結果顯示)
+# 主畫面
 if st.session_state.matched_personas is not None:
     st.markdown("---")
-    st.subheader("3. 選擇相關 Persona")
-    st.markdown("以下是根據您的主題**語意關聯度**匹配出的 Persona，請勾選您想為其規劃策略的對象。")
+    st.subheader("4. 選擇相關 Persona")
+    st.markdown("以下是根據您的主題與 Query Fan Out (若有) **語意關聯度**匹配出的 Persona。")
 
     selected_indices = []
     
@@ -293,7 +342,7 @@ if st.session_state.matched_personas is not None:
                 try:
                     model = genai.GenerativeModel('gemini-1.5-flash-latest')
                     selected_df = st.session_state.matched_personas.loc[selected_indices]
-                    prompt = create_dynamic_prompt(topic, selected_df)
+                    prompt = create_dynamic_prompt(topic, selected_df, st.session_state.query_fan_out_df)
 
                     with st.spinner("🧠 AI 內容顧問正在生成初步點子..."):
                         response = model.generate_content(prompt)
@@ -305,18 +354,18 @@ if st.session_state.matched_personas is not None:
 
     if st.session_state.strategy_text:
         st.markdown("---")
-        st.subheader("4. AI 生成的初步內容策略")
+        st.subheader("5. AI 生成的初步內容策略")
         st.markdown(st.session_state.strategy_text)
 
         st.markdown("---")
-        st.subheader("5. 整合行銷漏斗策略")
+        st.subheader("6. 整合行銷漏斗策略")
         if st.button("🧠 生成整合行銷漏斗策略", use_container_width=True, type="primary"):
             if not st.session_state.api_key_configured:
                 st.error("請在左側側邊欄輸入您的 Gemini API 金鑰。")
             else:
                 try:
                     model = genai.GenerativeModel('gemini-1.5-flash-latest')
-                    funnel_prompt = create_funnel_prompt(topic, st.session_state.strategy_text)
+                    funnel_prompt = create_funnel_prompt(topic, st.session_state.strategy_text, st.session_state.query_fan_out_df)
                     
                     with st.spinner("👑 AI 行銷總監正在建構漏斗策略..."):
                         funnel_response = model.generate_content(funnel_prompt)
