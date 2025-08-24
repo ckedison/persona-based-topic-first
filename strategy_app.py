@@ -21,7 +21,7 @@ def create_persona_generation_prompt(topic):
 請扮演一位頂尖的市場研究與用戶體驗專家。
 我的核心產品/服務主題是：「{topic}」。
 
-你的任務是為這個主題生成 10 個**高度相關且具體**的潛在目標人物誌 (Persona)。
+你的首要任務是深度思考「{topic}」這個主題的核心目標客群是誰。接著，為這個主題生成 10 個**與主題直接相關、且極具代表性**的潛在目標人物誌 (Persona)。**生成的 Persona 必須是這個主題最核心、最直接的目標客群，避免生成過於寬泛或關聯度低的角色。**
 
 請嚴格遵循以下 CSV 格式輸出，包含標頭，並且不要有任何其他的開頭或結尾文字。每一筆資料的欄位內容請用雙引號 `"` 包覆，以避免格式錯誤。
 
@@ -34,11 +34,11 @@ def create_persona_generation_prompt(topic):
 
 **生成指南:**
 - **persona_name:** 給一個具體且有代表性的名字 (例如: 焦慮的新手媽媽 怡君)。
-- **summary:** 一句話總結這個 Persona 的核心特徵。
-- **goals:** 他們在使用與「{topic}」相關的產品/服務時，最想達成的 2-3 個目標。
-- **pain_points:** 他們在「{topic}」這個領域遇到的 2-3 個主要困難或煩惱。
-- **keywords:** 他們可能會用來搜尋相關資訊的 3-5 個關鍵字。
-- **preferred_formats:** 他們最喜歡用來接收資訊的 3-4 種內容格式 (例如: Podcast, IG圖文卡, 深度文章, 線上課程, YouTube影片, 研究報告, 線下活動等)。
+- **summary:** 一句話總結這個 Persona 的核心特徵，**並點出他與「{topic}」的關係**。
+- **goals:** 他們在「{topic}」這個主題上，最想達成的 2-3 個具體目標。
+- **pain_points:** 他們在「{topic}」這個主題上，遇到的 2-3 個主要困難或煩惱。
+- **keywords:** 他們為了**解決上述痛點**或**達成目標**時，可能會用來搜尋的 3-5 個關鍵字。
+- **preferred_formats:** 他們最喜歡用來接收**與「{topic}」相關資訊**的 3-4 種內容格式 (例如: Podcast, IG圖文卡, 深度文章, 線上課程, YouTube影片, 研究報告, 線下活動等)。
 
 請開始生成。
 """
@@ -396,7 +396,7 @@ with st.sidebar:
     st.subheader("3. 輸入核心主題")
     topic = st.text_input("輸入您想規劃內容的核心主題", placeholder="例如：青少年理財教育")
 
-    if st.button("🔍 語意匹配 Persona", use_container_width=True, type="primary"):
+    if st.button("� 語意匹配 Persona", use_container_width=True, type="primary"):
         if not st.session_state.api_key_configured:
             st.warning("請先輸入並驗證您的 API 金鑰。")
         elif not topic:
@@ -535,3 +535,4 @@ if st.session_state.matched_personas is not None:
 
 else:
     st.info("請在左側面板完成設定，匹配結果將顯示於此。")
+�
