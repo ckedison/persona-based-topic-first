@@ -467,7 +467,7 @@ with st.sidebar:
             if not st.session_state.api_key_configured or not topic:
                 st.warning("請先輸入 API 金鑰和核心主題。")
             else:
-                generated_df = generate_and_select_personas(topic, api_key)
+                generated_df = generate_and_validate_personas(topic, api_key)
                 if generated_df is not None:
                     st.session_state.persona_df = generated_df
                     st.session_state.personas_are_generated = True
