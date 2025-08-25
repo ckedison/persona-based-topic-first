@@ -388,7 +388,6 @@ with st.sidebar:
         key="persona_uploader",
     )
     if uploaded_persona_file:
-        # 當有新檔案上傳時，處理它
         try:
             df = pd.read_csv(uploaded_persona_file)
             required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
@@ -405,7 +404,6 @@ with st.sidebar:
             st.error(f"Persona 檔案讀取失敗：{e}")
             st.session_state.persona_df = None
     
-    # 如果沒有上傳檔案，且 session state 中也沒有，則顯示生成按鈕
     if uploaded_persona_file is None and st.session_state.persona_df is None:
         if st.button("🤖 自動生成 Persona 範例", use_container_width=True):
             if not st.session_state.api_key_configured or not topic:
@@ -462,7 +460,6 @@ with st.sidebar:
         elif st.session_state.persona_df is None:
             st.warning("請先上傳或自動生成 Persona 資料。")
         else:
-            # 確保 Persona 有 embeddings
             if 'embeddings' not in st.session_state.persona_df.columns:
                 with st.spinner("正在為 Persona 資料建立語意索引..."):
                     st.session_state.persona_df = process_and_embed_personas(st.session_state.persona_df, api_key)
