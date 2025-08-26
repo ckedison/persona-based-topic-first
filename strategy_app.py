@@ -25,36 +25,40 @@ def create_iterative_persona_prompt(topic):
 我的核心產品/服務主題是：「{topic}」。
 
 **你的任務**
-這是一個包含「生成-驗證-優化」的迭代任務，目標是產出 10 個與主題**高度相關 (語意關聯度 > 80%)** 的人物誌 (Persona)。請嚴格遵循以下三個步驟：
+你的任務是為這個主題生成 10 個**與主題直接相關、且極具代表性**的潛在目標人物誌 (Persona)。為了確保最高品質，請嚴格遵循以下的思考與執行流程：
 
-**步驟 1: 初步生成 (Initial Generation)**
-請先根據核心主題「{topic}」，生成 20 個你認為最相關的潛在目標人物誌。請確保它們具體、有代表性，且能反映主題的核心客群。
+**思考流程 (Chain of Thought):**
 
-**步驟 2: 自我驗證與篩選 (Self-Correction & Filtering)**
-請回顧你生成的 20 個候選者，並進行嚴格的自我評估。問自己：「這個 Persona 與『{topic}』的連結夠直接嗎？還是過於寬泛？」 剔除那些關聯度較低的，只保留最優質的候選者。
+1.  **第一步：解構主題**
+    * 首先，請在內心分析「{topic}」這個主題的核心價值是什麼？它主要解決了誰的什麼問題？
 
-**步驟 3: 最終輸出 (Final Output)**
-從你篩選出的優質候選者中，選出**最終的 10 位**。如果經過篩選後，優質候選者不足 10 位，請根據你在步驟 2 的學習，生成新的、更聚焦的 Persona 來補足數量。
+2.  **第二步：發想核心用戶群**
+    * 基於上述分析，腦力激盪出 5-7 個最可能對此主題有強烈需求的**具體用戶群體** (例如，如果主題是「幼兒情緒管理」，用戶群可能是「家有2-5歲幼兒的新手父母」、「幼兒園老師」、「兒童心理諮商師」等)。
+
+3.  **第三步：從用戶群到 Persona**
+    * 從你發想的用戶群中，挑選並深化，創造出 10 個具體的 Persona。每一個 Persona 都必須有一個清晰的背景故事，讓他/她與「{topic}」的連結不言而喻。**避免生成「學生」、「上班族」等過於模糊的角色。**
+
+**最終輸出**
+在完成上述思考流程後，請**只**提供最終的 10 份 Persona。
 
 **輸出格式**
-請**只**提供最終的 10 份 Persona，並嚴格遵循以下 CSV 格式，包含標頭，不要有任何步驟描述或其他文字。每一筆資料的欄位內容請用雙引號 `"` 包覆。
+請嚴格遵循以下 CSV 格式，包含標頭，不要有任何步驟描述或其他文字。每一筆資料的欄位內容請用雙引號 `"` 包覆。
 
 ```csv
 "persona_name","summary","goals","pain_points","keywords","preferred_formats"
 "範例人物誌1","範例摘要1","範例目標1","範例痛點1","關鍵字1,關鍵字2","格式1,格式2"
-"範例人物誌2","範例摘要2","範例目標2","範例痛點2","關鍵字3,關鍵字4","格式3,格式4"
 ... (直到第10筆)
 ```
 
-**生成指南:**
+**生成指南 (極度重要):**
 - **persona_name:** 給一個具體且有代表性的名字 (例如: 焦慮的新手媽媽 怡君)。
-- **summary:** 一句話總結這個 Persona 的核心特徵，**並點出他與「{topic}」的關係**。
-- **goals:** 他們在「{topic}」這個主題上，最想達成的 2-3 個具體目標。
-- **pain_points:** 他們在「{topic}」這個主題上，遇到的 2-3 個主要困難或煩惱。
-- **keywords:** 他們為了**解決上述痛點**或**達成目標**時，可能會用來搜尋的 3-5 個關鍵字。
-- **preferred_formats:** 他們最喜歡用來接收**與「{topic}」相關資訊**的 3-4 種內容格式 (例如: Podcast, IG圖文卡, 深度文章, 線上課程, YouTube影片, 研究報告, 線下活動等)。
+- **summary:** 一句話總結這個 Persona 的核心特徵，**並明確點出他與「{topic}」的直接關係**。
+- **goals:** 他們在「{topic}」這個主題上，最想達成的 2-3 個**具體**目標。
+- **pain_points:** 他們在「{topic}」這個主題上，遇到的 2-3 個**真實且迫切**的困難或煩惱。
+- **keywords:** 他們為了解決上述痛點或達成目標時，**最可能**用來搜尋的 3-5 個關鍵字。
+- **preferred_formats:** 他們最喜歡用來接收**與「{topic}」相關資訊**的 3-4 種內容格式。
 
-請開始執行這個迭代任務。
+請開始執行。
 """
 
 def create_embedding_script(df_string, api_key):
@@ -180,28 +184,6 @@ def generate_query_fan_out_with_gemini(topic, api_key):
         return df
     except Exception as e:
         st.error(f"自動生成 Query Fan Out 時發生錯誤: {e}")
-        return None
-
-def process_and_embed_personas(df, api_key):
-    """為 Persona DataFrame 生成 Embeddings"""
-    try:
-        genai.configure(api_key=api_key)
-        df['embedding_text'] = df['summary'].fillna('') + ' | ' + \
-                               df['goals'].fillna('') + ' | ' + \
-                               df['pain_points'].fillna('') + ' | ' + \
-                               df['keywords'].fillna('')
-        
-        texts_to_embed = df['embedding_text'].tolist()
-        
-        result = genai.embed_content(
-            model='models/text-embedding-004',
-            content=texts_to_embed,
-            task_type="RETRIEVAL_DOCUMENT"
-        )
-        df['embeddings'] = result['embedding']
-        return df
-    except Exception as e:
-        st.error(f"生成 Persona Embeddings 時發生錯誤: {e}")
         return None
 
 def create_dynamic_prompt(topic, selected_personas_df, query_fan_out_df=None):
