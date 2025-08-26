@@ -397,7 +397,20 @@ with st.sidebar:
             if st.button("處理貼上的 Persona 資料", key="process_pasted_persona"):
                 if pasted_persona_csv:
                     try:
-                        csv_io = io.StringIO(pasted_persona_csv)
+                        # 智慧解析貼上的內容
+                        match = re.search(r'```csv\n(.*?)\n```', pasted_persona_csv, re.DOTALL)
+                        if match:
+                            csv_text = match.group(1)
+                        else:
+                            required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
+                            header_str = '"' + '","'.join(required_headers) + '"'
+                            csv_start_index = pasted_persona_csv.find(header_str)
+                            if csv_start_index != -1:
+                                csv_text = pasted_persona_csv[csv_start_index:]
+                            else:
+                                csv_text = pasted_persona_csv # 直接嘗試解析
+
+                        csv_io = io.StringIO(csv_text)
                         df = pd.read_csv(csv_io)
                         st.session_state.persona_df = df
                         st.session_state.personas_are_generated = True
