@@ -10,11 +10,21 @@ import ast
 
 # --- 頁面設定 ---
 st.set_page_config(
-    page_title="Topic first  策略產生器（beta)",
-    page_icon="🎯",
+    page_title="Topic first 內容策略產生器",
+    page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# --- 隱藏 Streamlit UI 元件 ---
+hide_streamlit_style = """
+            <style>
+            #MainMenu {visibility: hidden;}
+            footer {visibility: hidden;}
+            header {visibility: hidden;}
+            </style>
+            """
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 # --- 核心功能函式 (Prompt Engineering & API Calls) ---
 
@@ -386,7 +396,7 @@ if 'strategy_text' not in st.session_state:
 
 # --- Streamlit 介面佈局 ---
 
-st.title("🎯 Topic first  策略產生器（beta) (語意分析版)")
+st.title("🚀 Topic first 內容策略產生器 (beta)")
 st.markdown("上傳您的 Persona，讓 AI 理解語意並為您打造主題優先的內容策略")
 
 with st.sidebar:
@@ -460,11 +470,21 @@ with st.sidebar:
     )
     if uploaded_persona_file:
         try:
+            # 將上傳的檔案轉換為 DataFrame
             df = pd.read_csv(uploaded_persona_file)
+            
+            # 檢查必要的欄位是否存在
             required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
+            # 如果有 'embeddings' 欄位，也將其視為有效
+            if 'embeddings' in df.columns:
+                required_headers.append('embeddings')
+
             missing_headers = [h for h in required_headers if h not in df.columns]
 
-            if missing_headers:
+            if 'embeddings' not in df.columns:
+                 st.warning("提醒：您上傳的檔案不含語意向量 (Embeddings)。請點擊下方的按鈕為其生成。")
+
+            if missing_headers and 'embeddings' not in missing_headers:
                 st.error(f"Persona CSV 檔案缺少欄位: {', '.join(missing_headers)}")
                 st.session_state.persona_df = None
             else:
@@ -474,6 +494,22 @@ with st.sidebar:
             st.error(f"Persona 檔案讀取失敗：{e}")
             st.session_state.persona_df = None
     
+    # 區塊 C: 本地端執行 Embedding
+    with st.expander("需要為 Persona 資料建立語意索引嗎？"):
+        st.markdown("如果您上傳了自己的檔案，或貼上了 AI 生成的資料，請點擊此處產生一段 Python 腳本，在您自己的電腦上安全地執行語意分析，以避免 API 超額問題。")
+        if st.button("產生本地端執行腳本", key="gen_embedding_script"):
+            if st.session_state.persona_df is not None:
+                df_string = st.session_state.persona_df.to_csv(index=False)
+                st.session_state.embedding_script = create_embedding_script(df_string, api_key)
+            else:
+                st.warning("請先上傳或貼上 Persona 資料。")
+        
+        if 'embedding_script' in st.session_state:
+            st.text_area("1. 複製以下 Python 程式碼，儲存成 .py 檔案", value=st.session_state.embedding_script, height=200)
+            st.markdown("2. 在您的電腦上安裝必要的套件 (`pip install pandas google-generativeai`) 並執行此腳本。")
+            st.markdown("3. 執行成功後，將生成的 `personas_with_embeddings.csv` 檔案，透過上方的上傳區塊重新上傳。")
+
+
     st.markdown("---")
 
     st.subheader("3. Query Fan Out 資料 (選填)")
@@ -518,39 +554,39 @@ with st.sidebar:
             st.warning("請輸入核心主題。")
         elif st.session_state.persona_df is None:
             st.warning("請先上傳或生成並處理 Persona 資料。")
+        elif 'embeddings' not in st.session_state.persona_df.columns:
+            st.warning("您的 Persona 資料尚未建立語意索引，請先在步驟 2 的 AI 輔助區塊中，生成並執行本地端腳本，再重新上傳檔案。")
         else:
-            if 'embeddings' not in st.session_state.persona_df.columns:
-                with st.spinner("正在為 Persona 資料建立語意索引..."):
-                    st.session_state.persona_df = process_and_embed_personas(st.session_state.persona_df, api_key)
-            
-            if st.session_state.persona_df is not None:
-                with st.spinner("正在進行語意分析與匹配..."):
-                    try:
-                        context_text = topic
-                        if st.session_state.query_fan_out_df is not None:
-                            queries = " ".join(st.session_state.query_fan_out_df['query'].fillna(''))
-                            intents = " ".join(st.session_state.query_fan_out_df['user_intent'].fillna(''))
-                            context_text = f"{topic} - 相關查詢與意圖: {queries} {intents}"
+            with st.spinner("正在進行語意分析與匹配..."):
+                try:
+                    # 將儲存為字串的 embeddings 轉回 list of floats
+                    st.session_state.persona_df['embeddings'] = st.session_state.persona_df['embeddings'].apply(ast.literal_eval)
 
-                        context_embedding_result = genai.embed_content(
-                            model='models/text-embedding-004',
-                            content=context_text,
-                            task_type="RETRIEVAL_QUERY"
-                        )
-                        context_embedding = np.array(context_embedding_result['embedding']).reshape(1, -1)
-                        
-                        persona_embeddings = np.array(st.session_state.persona_df['embeddings'].tolist())
-                        similarities = cosine_similarity(context_embedding, persona_embeddings)[0]
-                        
-                        df = st.session_state.persona_df.copy()
-                        df['score'] = similarities
+                    context_text = topic
+                    if st.session_state.query_fan_out_df is not None:
+                        queries = " ".join(st.session_state.query_fan_out_df['query'].fillna(''))
+                        intents = " ".join(st.session_state.query_fan_out_df['user_intent'].fillna(''))
+                        context_text = f"{topic} - 相關查詢與意圖: {queries} {intents}"
 
-                        matched = df.sort_values(by='score', ascending=False).head(10)
+                    context_embedding_result = genai.embed_content(
+                        model='models/text-embedding-004',
+                        content=context_text,
+                        task_type="RETRIEVAL_QUERY"
+                    )
+                    context_embedding = np.array(context_embedding_result['embedding']).reshape(1, -1)
+                    
+                    persona_embeddings = np.array(st.session_state.persona_df['embeddings'].tolist())
+                    similarities = cosine_similarity(context_embedding, persona_embeddings)[0]
+                    
+                    df = st.session_state.persona_df.copy()
+                    df['score'] = similarities
 
-                        st.session_state.matched_personas = matched
-                        st.session_state.strategy_text = None 
-                    except Exception as e:
-                        st.error(f"語意匹配時發生錯誤: {e}")
+                    matched = df.sort_values(by='score', ascending=False).head(10)
+
+                    st.session_state.matched_personas = matched
+                    st.session_state.strategy_text = None 
+                except Exception as e:
+                    st.error(f"語意匹配時發生錯誤: {e}")
 
 # 主畫面
 if st.session_state.matched_personas is not None:
@@ -638,3 +674,29 @@ if st.session_state.matched_personas is not None:
 
 else:
     st.info("請在左側面板完成設定，匹配結果將顯示於此。")
+    st.markdown("---")
+    st.subheader("格式範例")
+    
+    st.markdown("**Persona 資料格式範例**")
+    persona_example_data = {
+        'persona_name': ['新手媽媽 怡君'],
+        'summary': ['家有1歲嬰兒的全職媽媽，對嬰兒發展感到焦慮，渴望獲得專家指引'],
+        'goals': ['希望孩子健康成長，了解各階段發展里程碑'],
+        'pain_points': ['資訊過載但不知如何篩選，擔心自己做得不夠好'],
+        'keywords': ['嬰兒發展,副食品,睡眠引導'],
+        'preferred_formats': ['Podcast,IG圖文卡,深度文章']
+    }
+    st.dataframe(pd.DataFrame(persona_example_data))
+
+    st.markdown("**Query Fan Out 資料格式範例**")
+    query_example_data = {
+        'query': ['如何教小孩理財'],
+        'type': ['問題 (Question)'],
+        'user_intent': ['尋找具體的兒童理財教育方法與步驟'],
+        'reasoning': ['這是核心主題最直接的資訊型查詢']
+    }
+    st.dataframe(pd.DataFrame(query_example_data))
+
+
+st.sidebar.markdown("---")
+st.sidebar.caption("此工具由劉呈逸開發 (https://www.facebook.com/edison.liu.180)")
