@@ -182,6 +182,28 @@ def generate_query_fan_out_with_gemini(topic, api_key):
         st.error(f"自動生成 Query Fan Out 時發生錯誤: {e}")
         return None
 
+def process_and_embed_personas(df, api_key):
+    """為 Persona DataFrame 生成 Embeddings"""
+    try:
+        genai.configure(api_key=api_key)
+        df['embedding_text'] = df['summary'].fillna('') + ' | ' + \
+                               df['goals'].fillna('') + ' | ' + \
+                               df['pain_points'].fillna('') + ' | ' + \
+                               df['keywords'].fillna('')
+        
+        texts_to_embed = df['embedding_text'].tolist()
+        
+        result = genai.embed_content(
+            model='models/text-embedding-004',
+            content=texts_to_embed,
+            task_type="RETRIEVAL_DOCUMENT"
+        )
+        df['embeddings'] = result['embedding']
+        return df
+    except Exception as e:
+        st.error(f"生成 Persona Embeddings 時發生錯誤: {e}")
+        return None
+
 def create_dynamic_prompt(topic, selected_personas_df, query_fan_out_df=None):
     """根據主題和選擇的 Persona 動態生成 Prompt (優化版)"""
     persona_details = ""
