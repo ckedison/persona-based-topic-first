@@ -17,6 +17,33 @@ st.set_page_config(
 
 # --- 核心功能函式 (Prompt Engineering & API Calls) ---
 
+def create_persona_generation_prompt(topic):
+    """為 AI 輔助生成 Persona 建立給使用者的 Prompt"""
+    return f"""
+請扮演一位頂尖的市場研究員與使用者體驗專家。
+我的核心主題是：「{topic}」。
+
+你的任務是為這個主題，發想 10 位潛在的目標受眾 (Persona)。
+
+請嚴格遵循以下 CSV 格式輸出，包含標頭，並且不要有任何其他的開頭或結尾文字。每一筆資料的欄位內容請用雙引號 `"` 包覆，以避免格式錯誤。
+
+```csv
+"persona_name","summary","goals","pain_points","keywords","preferred_formats"
+"範例人物1","範例摘要1","範例目標1","範例痛點1","範例關鍵字1","範例偏好格式1"
+"範例人物2","範例摘要2","範例目標2","範例痛點2","範例關鍵字2","範例偏好格式2"
+... (直到第10筆)
+```
+
+**生成指南:**
+- **persona_name:** 一個具體、好記的人物名稱 (例如：焦慮的新手媽媽 - 小雅)。
+- **summary:** 對這個人物的背景、職業、價值觀的簡要描述。
+- **goals:** 這個人物在使用與「{topic}」相關的產品/服務時，最想達成的目標是什麼？
+- **pain_points:** 在達成目標的過程中，他們遇到了哪些困難、挫折或痛點？
+- **keywords:** 他們在搜尋與此主題相關的資訊時，可能會使用哪些關鍵字？(請提供 3-5 個)
+- **preferred_formats:** 他們偏好透過哪種格式來接收資訊？ (例如：短影音, Podcast, 深度長文, IG 圖文卡, 線上研討會)
+
+請確保生成的 Persona 具有多樣性，能涵蓋不同的需求與背景。請開始生成。
+"""
 
 
 def create_query_fan_out_prompt(topic):
@@ -53,6 +80,7 @@ def generate_query_fan_out_with_gemini(topic, api_key):
         prompt = create_query_fan_out_prompt(topic)
         response = model.generate_content(prompt)
         
+        # 從回應中提取 CSV 內容
         csv_text = response.text.strip().replace('```csv', '').replace('```', '')
         
         csv_io = io.StringIO(csv_text)
@@ -72,6 +100,7 @@ def process_and_embed_personas(df, api_key):
     """為 Persona DataFrame 生成 Embeddings"""
     try:
         genai.configure(api_key=api_key)
+        # 建立一個用於語意分析的組合欄位
         df['embedding_text'] = df['summary'].fillna('') + ' | ' + \
                                df['goals'].fillna('') + ' | ' + \
                                df['pain_points'].fillna('') + ' | ' + \
@@ -79,6 +108,7 @@ def process_and_embed_personas(df, api_key):
         
         texts_to_embed = df['embedding_text'].tolist()
         
+        # 呼叫 embedding API
         result = genai.embed_content(
             model='models/text-embedding-004',
             content=texts_to_embed,
@@ -91,7 +121,7 @@ def process_and_embed_personas(df, api_key):
         return None
 
 def create_dynamic_prompt(topic, selected_personas_df, query_fan_out_df=None):
-    """根據主題和選擇的 Persona 動態生成 Prompt (優化版)"""
+    """根據主題和選擇的 Persona 動態生成初步策略的 Prompt"""
     persona_details = ""
     for index, row in selected_personas_df.iterrows():
         persona_details += f"""
@@ -106,6 +136,7 @@ def create_dynamic_prompt(topic, selected_personas_df, query_fan_out_df=None):
     idea_format_instruction = ""
     idea_structure = ""
 
+    # 如果有提供 Query Fan Out 資料，則在 Prompt 中加入相關指示
     if query_fan_out_df is not None and not query_fan_out_df.empty:
         query_fan_out_section = f"""
 另外，請務必參考以下由 SEO 專家分析的「Query Fan Out」資料，這代表了用戶在搜尋此主題時的真實意圖與變化：
@@ -241,9 +272,9 @@ def create_funnel_prompt(topic, strategy_text, conversion_goal, query_fan_out_df
 *目標：透過高價值、易擴散的內容，大規模吸引對此主題感興趣的潛在用戶，建立品牌專業形象。*
 
 **➡️ 內容點子 1 (主打):** [從清單中選擇最適合引流的內容點子]
-   - **目標 Persona:** [此點子主要針對的 Persona]
-   - **引流與擴散策略:** [例如：針對此主題投放 Instagram/Facebook 廣告；優化 SEO 關鍵字「...」；與親子KOL合作推廣此內容]
-   - **➡️ 轉換至下一階段的 CTA (Call-to-Action):** **(此為重點)** [設計一個明確的行動呼籲，將用戶從這個認知內容，引導至考慮階段的內容。例如：「想知道如何實際應用嗎？點擊連結，免費下載我們的『XXX實踐手冊』！」]
+    - **目標 Persona:** [此點子主要針對的 Persona]
+    - **引流與擴散策略:** [例如：針對此主題投放 Instagram/Facebook 廣告；優化 SEO 關鍵字「...」；與親子KOL合作推廣此內容]
+    - **➡️ 轉換至下一階段的 CTA (Call-to-Action):** **(此為重點)** [設計一個明確的行動呼籲，將用戶從這個認知內容，引導至考慮階段的內容。例如：「想知道如何實際應用嗎？點擊連結，免費下載我們的『XXX實踐手冊』！」]
 
 ---
 
@@ -251,10 +282,10 @@ def create_funnel_prompt(topic, strategy_text, conversion_goal, query_fan_out_df
 *目標：透過更深入、更具體的內容，解決用戶的核心痛點，建立信任感，並獲取潛在客戶名單 (Leads)。*
 
 **➡️ 內容點子 2 (主打):** [從清單中選擇最適合建立信任/獲取名單的內容點子，例如電子書、網路研討會、深度指南]
-   - **目標 Persona:** [此點子主要針對的 Persona]
-   - **接收流量來源:** [明確說明此內容的流量主要來自哪個認知階段的內容]
-   - **價值交換設計 (Lead Magnet):** [例如：設計成一份精美的 PDF 電子書，用戶需提供 Email 才能下載。]
-   - **➡️ 轉換至下一階段的 CTA (Call-to-Action):** **(此為重點)** [在用戶獲取此內容後，設計後續的引導路徑。例如：「下載手冊後，我們將在三天後寄送一封郵件，與您分享如何將手冊內容應用在...，並提供一個專屬的訂閱優惠。」]
+    - **目標 Persona:** [此點子主要針對的 Persona]
+    - **接收流量來源:** [明確說明此內容的流量主要來自哪個認知階段的內容]
+    - **價值交換設計 (Lead Magnet):** [例如：設計成一份精美的 PDF 電子書，用戶需提供 Email 才能下載。]
+    - **➡️ 轉換至下一階段的 CTA (Call-to-Action):** **(此為重點)** [在用戶獲取此內容後，設計後續的引導路徑。例如：「下載手冊後，我們將在三天後寄送一封郵件，與您分享如何將手冊內容應用在...，並提供一個專屬的訂閱優惠。」]
 
 ---
 
@@ -262,9 +293,9 @@ def create_funnel_prompt(topic, strategy_text, conversion_goal, query_fan_out_df
 *目標：臨門一腳，透過直接的價值主張與誘因，促使用戶完成最終購買決策。*
 
 **➡️ 內容點子 3 (主打):** [從清單中選擇最適合導購的內容點子，例如產品比較、用戶見證、優惠活動頁]
-   - **目標 Persona:** [此點子主要針對的 Persona]
-   - **接收流量來源:** [明確說明此內容的流量主要來自哪個考慮階段的內容或後續的 Email/LINE 行銷]
-   - **導購與行動呼籲 (CTA) 設計:** [設計強而有力的 CTA，**務必結合前面提供的產品資訊與目標網址**。例如：「立即訂閱『{conversion_goal.get('name', '我們的服務')}』，解鎖所有專家內容！點擊前往：{conversion_goal.get('url', '#')}」]
+    - **目標 Persona:** [此點子主要針對的 Persona]
+    - **接收流量來源:** [明確說明此內容的流量主要來自哪個考慮階段的內容或後續的 Email/LINE 行銷]
+    - **導購與行動呼籲 (CTA) 設計:** [設計強而有力的 CTA，**務必結合前面提供的產品資訊與目標網址**。例如：「立即訂閱『{conversion_goal.get('name', '我們的服務')}』，解鎖所有專家內容！點擊前往：{conversion_goal.get('url', '#')}」]
 
 ---
 
@@ -287,8 +318,6 @@ if 'api_key_configured' not in st.session_state:
     st.session_state.api_key_configured = False
 if 'strategy_text' not in st.session_state:
     st.session_state.strategy_text = None
-if 'personas_are_generated' not in st.session_state:
-    st.session_state.personas_are_generated = False
 
 
 # --- Streamlit 介面佈局 ---
@@ -336,21 +365,21 @@ with st.sidebar:
                 st.session_state.persona_df = None
             else:
                 st.session_state.persona_df = df
-                st.session_state.personas_are_generated = False
                 st.success(f"成功載入 {len(df)} 筆 Persona 資料！")
         except Exception as e:
             st.error(f"Persona 檔案讀取失敗：{e}")
             st.session_state.persona_df = None
     
-    # 區塊 B: AI 輔助生成
+    # 區塊 B: AI 輔助生成 (指令工程師模式)
     with st.expander("需要 AI 協助生成 Persona 嗎？"):
-        st.markdown("若您沒有現成的 Persona 檔案，可使用此功能。")
+        st.markdown("若您沒有現成的 Persona 檔案，可使用此功能產生指令，再由您手動執行。")
         
         if st.button("產生 Persona 生成指令", key="gen_persona_prompt"):
             if not topic:
                 st.warning("請先輸入核心主題。")
             else:
-                st.session_state.persona_prompt = create_iterative_persona_prompt(topic)
+                # 產生指令並存入 session state
+                st.session_state.persona_prompt = create_persona_generation_prompt(topic)
 
         if 'persona_prompt' in st.session_state:
             st.text_area("1. 複製以下指令，並到您的 Gemini 介面執行", value=st.session_state.persona_prompt, height=200)
@@ -360,24 +389,24 @@ with st.sidebar:
             if st.button("處理貼上的 Persona 資料", key="process_pasted_persona"):
                 if pasted_persona_csv:
                     try:
-                        # 智慧解析貼上的內容
+                        # 智慧解析貼上的內容，移除可能的前後綴與程式碼區塊
                         match = re.search(r'```csv\n(.*?)\n```', pasted_persona_csv, re.DOTALL)
                         if match:
                             csv_text = match.group(1)
                         else:
-                            required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
-                            header_str = '"' + '","'.join(required_headers) + '"'
-                            csv_start_index = pasted_persona_csv.find(header_str)
-                            if csv_start_index != -1:
-                                csv_text = pasted_persona_csv[csv_start_index:]
-                            else:
-                                csv_text = pasted_persona_csv # 直接嘗試解析
+                            # 如果沒有找到 markdown 區塊，直接嘗試解析
+                            csv_text = pasted_persona_csv.strip()
 
                         csv_io = io.StringIO(csv_text)
                         df = pd.read_csv(csv_io)
-                        st.session_state.persona_df = df
-                        st.session_state.personas_are_generated = True
-                        st.success(f"成功處理 {len(df)} 筆貼上的 Persona 資料！")
+                        
+                        # 驗證必要欄位
+                        required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
+                        if not all(h in df.columns for h in required_headers):
+                             st.error(f"貼上的資料格式不符，請確認 CSV 包含所有必要欄位。")
+                        else:
+                            st.session_state.persona_df = df
+                            st.success(f"成功處理 {len(df)} 筆貼上的 Persona 資料！")
                     except Exception as e:
                         st.error(f"處理貼上資料時發生錯誤，請確認格式是否為標準 CSV: {e}")
                 else:
@@ -407,6 +436,7 @@ with st.sidebar:
             st.error(f"Query Fan Out 檔案讀取失敗：{e}")
             st.session_state.query_fan_out_df = None
             
+    # 只有在沒有上傳檔案，也沒有已存在的資料時，才顯示自動生成按鈕
     if uploaded_query_file is None and st.session_state.query_fan_out_df is None:
         if st.button("📊 自動生成 Query Fan Out", use_container_width=True):
             if not st.session_state.api_key_configured or not topic:
@@ -428,19 +458,22 @@ with st.sidebar:
         elif st.session_state.persona_df is None:
             st.warning("請先上傳或生成並處理 Persona 資料。")
         else:
+            # 只有在 persona_df 中沒有 'embeddings' 欄位時才進行處理
             if 'embeddings' not in st.session_state.persona_df.columns:
                 with st.spinner("正在為 Persona 資料建立語意索引..."):
                     st.session_state.persona_df = process_and_embed_personas(st.session_state.persona_df, api_key)
             
-            if st.session_state.persona_df is not None:
+            if st.session_state.persona_df is not None and 'embeddings' in st.session_state.persona_df.columns:
                 with st.spinner("正在進行語意分析與匹配..."):
                     try:
+                        # 組合主題與查詢意圖作為語意分析的上下文
                         context_text = topic
                         if st.session_state.query_fan_out_df is not None:
                             queries = " ".join(st.session_state.query_fan_out_df['query'].fillna(''))
                             intents = " ".join(st.session_state.query_fan_out_df['user_intent'].fillna(''))
                             context_text = f"{topic} - 相關查詢與意圖: {queries} {intents}"
 
+                        # 為上下文生成 embedding
                         context_embedding_result = genai.embed_content(
                             model='models/text-embedding-004',
                             content=context_text,
@@ -448,20 +481,22 @@ with st.sidebar:
                         )
                         context_embedding = np.array(context_embedding_result['embedding']).reshape(1, -1)
                         
+                        # 計算與所有 Persona 的餘弦相似度
                         persona_embeddings = np.array(st.session_state.persona_df['embeddings'].tolist())
                         similarities = cosine_similarity(context_embedding, persona_embeddings)[0]
                         
                         df = st.session_state.persona_df.copy()
                         df['score'] = similarities
 
+                        # 找出最相關的前 10 名
                         matched = df.sort_values(by='score', ascending=False).head(10)
 
                         st.session_state.matched_personas = matched
-                        st.session_state.strategy_text = None 
+                        st.session_state.strategy_text = None # 清空舊策略
                     except Exception as e:
                         st.error(f"語意匹配時發生錯誤: {e}")
 
-# 主畫面
+# --- 主畫面 ---
 if st.session_state.matched_personas is not None:
     st.markdown("---")
     st.subheader("4. 選擇相關 Persona")
@@ -472,6 +507,7 @@ if st.session_state.matched_personas is not None:
     if st.session_state.matched_personas.empty:
         st.warning("找不到符合條件的 Persona，請嘗試調整核心主題或檢查上傳的檔案。")
     else:
+        # 顯示匹配到的 Persona 列表供使用者勾選
         for index, row in st.session_state.matched_personas.iterrows():
             cols = st.columns([0.1, 0.7, 0.2])
             with cols[0]:
@@ -540,10 +576,16 @@ if st.session_state.matched_personas is not None:
                         
                         with st.spinner("👑 AI 行銷總監正在建構漏斗策略..."):
                             funnel_response = model.generate_content(funnel_prompt)
-                            st.markdown(funnel_response.text)
+                            # 在表單外顯示結果
+                            st.session_state.funnel_text = funnel_response.text
 
                     except Exception as e:
                         st.error(f"生成行銷漏斗時發生錯誤：{e}")
+                        st.session_state.funnel_text = None
+
+        # 將漏斗結果的顯示移到表單外部
+        if 'funnel_text' in st.session_state and st.session_state.funnel_text:
+            st.markdown(st.session_state.funnel_text)
 
 else:
     st.info("請在左側面板完成設定，匹配結果將顯示於此。")
