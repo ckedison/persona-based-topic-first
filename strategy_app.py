@@ -15,7 +15,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 核心功能函式 (Prompt Engineering) ---
+# --- 核心功能函式 (Prompt Engineering & API Calls) ---
 
 def create_iterative_persona_prompt(topic):
     """建立一個指導使用者進行迭代生成的 Persona Prompt"""
