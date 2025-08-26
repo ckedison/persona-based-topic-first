@@ -45,17 +45,20 @@ def create_persona_generation_prompt(topic, num_to_generate=20):
 請開始生成。
 """
 
-def generate_personas_with_gemini(topic, api_key):
-    """單次呼叫 API 生成 Persona DataFrame"""
+def generate_and_select_personas(topic, api_key, target_count=10):
+    """單批次生成並優選 Persona，以避免觸發速率限制"""
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        prompt = create_persona_generation_prompt(topic)
-        response = model.generate_content(prompt)
+        generation_model = genai.GenerativeModel('gemini-1.5-flash-latest')
         
-        raw_text = response.text.strip()
+        # 步驟 1: 一次性生成一批候選者
+        with st.spinner("🤖 步驟 1/3: AI 正在生成一批 Persona 候選名單..."):
+            prompt = create_persona_generation_prompt(topic, num_to_generate=20)
+            response = generation_model.generate_content(prompt)
+            raw_text = response.text.strip()
+
+        # --- 強化 CSV 解析與驗證 ---
         required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
-        
         match = re.search(r'```csv\n(.*?)\n```', raw_text, re.DOTALL)
         if match:
             csv_text = match.group(1)
@@ -66,18 +69,37 @@ def generate_personas_with_gemini(topic, api_key):
                 st.error("AI 回應格式不符 (找不到標頭)，無法解析 Persona。")
                 return None
             csv_text = raw_text[csv_start_index:]
-
-        csv_io = io.StringIO(csv_text)
-        df = pd.read_csv(csv_io)
         
-        if not all(h in df.columns for h in required_headers):
-            st.error("AI 生成的 Persona 格式不符，請稍後再試。")
+        csv_io = io.StringIO(csv_text)
+        candidates_df = pd.read_csv(csv_io)
+
+        if not all(h in candidates_df.columns for h in candidates_df.columns):
+            st.error("AI 回應的 CSV 欄位不完整，無法解析 Persona。")
             return None
-            
-        return df
+        # --- 解析與驗證結束 ---
+
+        # 步驟 2: 一次性批次建立語意索引並評分
+        with st.spinner("📊 步驟 2/3: 正在為候選名單進行語意分析與評分..."):
+            candidates_df = process_and_embed_personas(candidates_df, api_key)
+            if candidates_df is None: return None
+
+            topic_embedding_result = genai.embed_content(model='models/text-embedding-004', content=topic, task_type="RETRIEVAL_QUERY")
+            topic_embedding = np.array(topic_embedding_result['embedding']).reshape(1, -1)
+
+            candidate_embeddings = np.array(candidates_df['embeddings'].tolist())
+            similarities = cosine_similarity(topic_embedding, candidate_embeddings)[0]
+            candidates_df['score'] = similarities
+
+        # 步驟 3: 直接選出分數最高的 N 位
+        with st.spinner("🏆 步驟 3/3: 正在從候選名單中擇優呈現..."):
+            top_personas = candidates_df.sort_values(by='score', ascending=False).head(target_count)
+        
+        return top_personas
+
     except Exception as e:
-        st.error(f"自動生成 Persona 時發生錯誤: {e}")
+        st.error(f"自動生成 Persona 時發生嚴重錯誤: {e}")
         return None
+
 
 def create_query_fan_out_prompt(topic):
     """為 AI 生成 Query Fan Out 建立 Prompt"""
