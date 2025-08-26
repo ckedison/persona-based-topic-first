@@ -6,6 +6,7 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 import io
 import re
+import ast
 
 # --- 頁面設定 ---
 st.set_page_config(
@@ -56,6 +57,82 @@ def create_iterative_persona_prompt(topic):
 請開始執行這個迭代任務。
 """
 
+def create_embedding_script(df_string, api_key):
+    """生成本地執行的 Python 腳本以建立 Embeddings"""
+    return f"""
+# -*- coding: utf-8 -*-
+import pandas as pd
+import google.generativeai as genai
+import io
+import time
+
+# --- 設定 ---
+# !!! 重要 !!! 請在此處貼上您自己的 Gemini API 金鑰
+API_KEY = "{api_key or '請在此處貼上您的API金鑰'}"
+CSV_DATA = '''
+{df_string}
+'''
+OUTPUT_FILENAME = "personas_with_embeddings.csv"
+
+# --- 主程式 ---
+def main():
+    print("1. 正在設定 API 金鑰...")
+    if not API_KEY or "請在此處" in API_KEY:
+        print("錯誤：API 金鑰為空，請在腳本中填寫您的 Gemini API 金鑰。")
+        return
+    try:
+        genai.configure(api_key=API_KEY)
+    except Exception as e:
+        print(f"錯誤：API 金鑰設定失敗 - {{e}}")
+        return
+
+    print("2. 正在讀取 Persona 資料...")
+    try:
+        csv_io = io.StringIO(CSV_DATA)
+        df = pd.read_csv(csv_io)
+        print(f"成功讀取 {{len(df)}} 筆 Persona。")
+    except Exception as e:
+        print(f"錯誤：CSV 資料讀取失敗 - {{e}}")
+        return
+
+    print("3. 正在準備文字以進行語意分析...")
+    df['embedding_text'] = df['summary'].fillna('') + ' | ' + \\
+                           df['goals'].fillna('') + ' | ' + \\
+                           df['pain_points'].fillna('') + ' | ' + \\
+                           df['keywords'].fillna('')
+    
+    texts_to_embed = df['embedding_text'].tolist()
+
+    print(f"4. 正在為 {{len(texts_to_embed)}} 筆資料請求語意向量 (Embeddings)...")
+    print("   (這個步驟可能會需要一些時間，且會消耗您的 API 配額)")
+    
+    try:
+        result = genai.embed_content(
+            model='models/text-embedding-004',
+            content=texts_to_embed,
+            task_type="RETRIEVAL_DOCUMENT"
+        )
+        df['embeddings'] = result['embedding']
+        print("   語意向量生成成功！")
+    except Exception as e:
+        print(f"錯誤：語意向量生成失敗 - {{e}}")
+        print("   請檢查您的 API 金鑰與方案配額。")
+        return
+
+    print(f"5. 正在將結果儲存至檔案: {{OUTPUT_FILENAME}}")
+    # 將 list 轉換為 string 以便儲存
+    df['embeddings'] = df['embeddings'].apply(str)
+    df.to_csv(OUTPUT_FILENAME, index=False, encoding='utf-8-sig')
+    
+    print("\\n---")
+    print("✅ 任務完成！")
+    print(f"請將生成的檔案 '{{OUTPUT_FILENAME}}' 上傳回 Streamlit 應用程式中。")
+
+if __name__ == "__main__":
+    main()
+"""
+
+
 def create_query_fan_out_prompt(topic):
     """為 AI 生成 Query Fan Out 建立 Prompt"""
     return f"""
@@ -103,28 +180,6 @@ def generate_query_fan_out_with_gemini(topic, api_key):
         return df
     except Exception as e:
         st.error(f"自動生成 Query Fan Out 時發生錯誤: {e}")
-        return None
-
-def process_and_embed_personas(df, api_key):
-    """為 Persona DataFrame 生成 Embeddings"""
-    try:
-        genai.configure(api_key=api_key)
-        df['embedding_text'] = df['summary'].fillna('') + ' | ' + \
-                               df['goals'].fillna('') + ' | ' + \
-                               df['pain_points'].fillna('') + ' | ' + \
-                               df['keywords'].fillna('')
-        
-        texts_to_embed = df['embedding_text'].tolist()
-        
-        result = genai.embed_content(
-            model='models/text-embedding-004',
-            content=texts_to_embed,
-            task_type="RETRIEVAL_DOCUMENT"
-        )
-        df['embeddings'] = result['embedding']
-        return df
-    except Exception as e:
-        st.error(f"生成 Persona Embeddings 時發生錯誤: {e}")
         return None
 
 def create_dynamic_prompt(topic, selected_personas_df, query_fan_out_df=None):
@@ -324,9 +379,6 @@ if 'api_key_configured' not in st.session_state:
     st.session_state.api_key_configured = False
 if 'strategy_text' not in st.session_state:
     st.session_state.strategy_text = None
-if 'personas_are_generated' not in st.session_state:
-    st.session_state.personas_are_generated = False
-
 
 # --- Streamlit 介面佈局 ---
 
@@ -356,31 +408,8 @@ with st.sidebar:
 
     st.subheader("2. Persona 資料")
     
-    # 區塊 A: 上傳檔案
-    uploaded_persona_file = st.file_uploader(
-        "上傳 Persona CSV 檔案 (建議)",
-        type="csv",
-        key="persona_uploader",
-    )
-    if uploaded_persona_file:
-        try:
-            df = pd.read_csv(uploaded_persona_file)
-            required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
-            missing_headers = [h for h in required_headers if h not in df.columns]
-
-            if missing_headers:
-                st.error(f"Persona CSV 檔案缺少欄位: {', '.join(missing_headers)}")
-                st.session_state.persona_df = None
-            else:
-                st.session_state.persona_df = df
-                st.session_state.personas_are_generated = False
-                st.success(f"成功載入 {len(df)} 筆 Persona 資料！")
-        except Exception as e:
-            st.error(f"Persona 檔案讀取失敗：{e}")
-            st.session_state.persona_df = None
-    
-    # 區塊 B: AI 輔助生成
-    with st.expander("需要 AI 協助生成 Persona 嗎？"):
+    # 區塊 A: AI 輔助生成
+    with st.expander("AI 輔助生成 Persona (建議)"):
         st.markdown("若您沒有現成的 Persona 檔案，可使用此功能。")
         
         if st.button("產生 Persona 生成指令", key="gen_persona_prompt"):
@@ -408,18 +437,39 @@ with st.sidebar:
                             if csv_start_index != -1:
                                 csv_text = pasted_persona_csv[csv_start_index:]
                             else:
-                                csv_text = pasted_persona_csv # 直接嘗試解析
+                                csv_text = pasted_persona_csv
 
                         csv_io = io.StringIO(csv_text)
                         df = pd.read_csv(csv_io)
                         st.session_state.persona_df = df
-                        st.session_state.personas_are_generated = True
                         st.success(f"成功處理 {len(df)} 筆貼上的 Persona 資料！")
                     except Exception as e:
                         st.error(f"處理貼上資料時發生錯誤，請確認格式是否為標準 CSV: {e}")
                 else:
                     st.warning("請先貼上資料。")
 
+    # 區塊 B: 上傳檔案
+    uploaded_persona_file = st.file_uploader(
+        "或上傳您自己的 Persona CSV 檔案",
+        type="csv",
+        key="persona_uploader",
+    )
+    if uploaded_persona_file:
+        try:
+            df = pd.read_csv(uploaded_persona_file)
+            required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
+            missing_headers = [h for h in required_headers if h not in df.columns]
+
+            if missing_headers:
+                st.error(f"Persona CSV 檔案缺少欄位: {', '.join(missing_headers)}")
+                st.session_state.persona_df = None
+            else:
+                st.session_state.persona_df = df
+                st.success(f"成功載入 {len(df)} 筆 Persona 資料！")
+        except Exception as e:
+            st.error(f"Persona 檔案讀取失敗：{e}")
+            st.session_state.persona_df = None
+    
     st.markdown("---")
 
     st.subheader("3. Query Fan Out 資料 (選填)")
