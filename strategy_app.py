@@ -6,7 +6,6 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 import io
 import re
-import ast
 
 # --- 頁面設定 ---
 st.set_page_config(
@@ -57,80 +56,112 @@ def create_iterative_persona_prompt(topic):
 請開始執行這個迭代任務。
 """
 
-def create_embedding_script(df_string, api_key):
-    """生成本地執行的 Python 腳本以建立 Embeddings"""
+def create_persona_refinement_prompt(topic, failed_personas_df, num_to_generate):
+    """根據低分範例，建立優化版的 Persona 生成 Prompt"""
+    failed_examples = ""
+    if not failed_personas_df.empty:
+        failed_examples += "之前的嘗試中，以下幾個 Persona 範例與核心主題「{topic}」的關聯度不夠高。請你分析它們的缺點，並生成**完全不同且更聚焦**的新人選：\n"
+        for index, row in failed_personas_df.head(3).iterrows():
+            failed_examples += f"- '{row['persona_name']}' (摘要: {row['summary']})\n"
+
     return f"""
-# -*- coding: utf-8 -*-
-import pandas as pd
-import google.generativeai as genai
-import io
-import time
+請扮演一位市場研究專家，我們正在進行一個迭代優化任務。
+核心主題是：「{topic}」。
 
-# --- 設定 ---
-# !!! 重要 !!! 請在此處貼上您自己的 Gemini API 金鑰
-API_KEY = "{api_key or '請在此處貼上您的API金鑰'}"
-CSV_DATA = '''
-{df_string}
-'''
-OUTPUT_FILENAME = "personas_with_embeddings.csv"
+{failed_examples}
 
-# --- 主程式 ---
-def main():
-    print("1. 正在設定 API 金鑰...")
-    if not API_KEY or "請在此處" in API_KEY:
-        print("錯誤：API 金鑰為空，請在腳本中填寫您的 Gemini API 金鑰。")
-        return
-    try:
-        genai.configure(api_key=API_KEY)
-    except Exception as e:
-        print(f"錯誤：API 金鑰設定失敗 - {{e}}")
-        return
+你的新任務是，生成 {num_to_generate} 個**新的、與主題「{topic}」有更強、更直接關聯**的人物誌 (Persona)。請避免之前範例中過於寬泛或間接的描述。
 
-    print("2. 正在讀取 Persona 資料...")
-    try:
-        csv_io = io.StringIO(CSV_DATA)
-        df = pd.read_csv(csv_io)
-        print(f"成功讀取 {{len(df)}} 筆 Persona。")
-    except Exception as e:
-        print(f"錯誤：CSV 資料讀取失敗 - {{e}}")
-        return
-
-    print("3. 正在準備文字以進行語意分析...")
-    df['embedding_text'] = df['summary'].fillna('') + ' | ' + \\
-                           df['goals'].fillna('') + ' | ' + \\
-                           df['pain_points'].fillna('') + ' | ' + \\
-                           df['keywords'].fillna('')
-    
-    texts_to_embed = df['embedding_text'].tolist()
-
-    print(f"4. 正在為 {{len(texts_to_embed)}} 筆資料請求語意向量 (Embeddings)...")
-    print("   (這個步驟可能會需要一些時間，且會消耗您的 API 配額)")
-    
-    try:
-        result = genai.embed_content(
-            model='models/text-embedding-004',
-            content=texts_to_embed,
-            task_type="RETRIEVAL_DOCUMENT"
-        )
-        df['embeddings'] = result['embedding']
-        print("   語意向量生成成功！")
-    except Exception as e:
-        print(f"錯誤：語意向量生成失敗 - {{e}}")
-        print("   請檢查您的 API 金鑰與方案配額。")
-        return
-
-    print(f"5. 正在將結果儲存至檔案: {{OUTPUT_FILENAME}}")
-    # 將 list 轉換為 string 以便儲存
-    df['embeddings'] = df['embeddings'].apply(str)
-    df.to_csv(OUTPUT_FILENAME, index=False, encoding='utf-8-sig')
-    
-    print("\\n---")
-    print("✅ 任務完成！")
-    print(f"請將生成的檔案 '{{OUTPUT_FILENAME}}' 上傳回 Streamlit 應用程式中。")
-
-if __name__ == "__main__":
-    main()
+請同樣遵循以下的 CSV 格式，不要包含其他文字：
+```csv
+"persona_name","summary","goals","pain_points","keywords","preferred_formats"
+```
 """
+
+
+def generate_and_validate_personas(topic, api_key, target_count=10, min_score=0.8, max_retries=3):
+    """迭代生成並驗證 Persona，直到滿足數量和品質要求"""
+    try:
+        genai.configure(api_key=api_key)
+        generation_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        
+        high_quality_personas_df = pd.DataFrame()
+        all_candidates_df = pd.DataFrame()
+        retries = 0
+        required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
+
+
+        while len(high_quality_personas_df) < target_count and retries < max_retries:
+            st.info(f"第 {retries + 1}/{max_retries} 次嘗試：正在生成並驗證 Persona 候選名單...")
+            
+            num_needed = target_count - len(high_quality_personas_df)
+            num_to_generate = max(num_needed, 20) # 每次至少生成20個
+
+            if retries == 0:
+                prompt = create_persona_generation_prompt(topic, num_to_generate)
+            else:
+                # 提供表現不佳的範例以供學習
+                low_score_candidates = all_candidates_df[all_candidates_df['score'] < min_score]
+                prompt = create_persona_refinement_prompt(topic, low_score_candidates, num_to_generate)
+
+            response = generation_model.generate_content(prompt)
+            raw_text = response.text.strip()
+            
+            # --- 強化 CSV 解析與驗證 ---
+            match = re.search(r'```csv\n(.*?)\n```', raw_text, re.DOTALL)
+            if match:
+                csv_text = match.group(1)
+            else:
+                header_str = '"' + '","'.join(required_headers) + '"'
+                csv_start_index = raw_text.find(header_str)
+                if csv_start_index == -1:
+                    st.warning(f"AI 回應格式不符 (找不到標頭)，正在重試...")
+                    retries += 1
+                    continue
+                csv_text = raw_text[csv_start_index:]
+            
+            csv_io = io.StringIO(csv_text)
+            new_candidates_df = pd.read_csv(csv_io)
+
+            if not all(h in new_candidates_df.columns for h in new_candidates_df.columns):
+                st.warning(f"AI 回應的 CSV 欄位不完整，正在重試...")
+                retries += 1
+                continue
+            # --- 解析與驗證結束 ---
+
+            new_candidates_df = process_and_embed_personas(new_candidates_df, api_key)
+            if new_candidates_df is None:
+                retries += 1
+                continue
+
+            topic_embedding_result = genai.embed_content(model='models/text-embedding-004', content=topic, task_type="RETRIEVAL_QUERY")
+            topic_embedding = np.array(topic_embedding_result['embedding']).reshape(1, -1)
+
+            candidate_embeddings = np.array(new_candidates_df['embeddings'].tolist())
+            similarities = cosine_similarity(topic_embedding, candidate_embeddings)[0]
+            new_candidates_df['score'] = similarities
+
+            current_batch_hq = new_candidates_df[new_candidates_df['score'] >= min_score]
+            
+            if not current_batch_hq.empty:
+                high_quality_personas_df = pd.concat([high_quality_personas_df, current_batch_hq]).drop_duplicates(subset=['persona_name'])
+
+            all_candidates_df = pd.concat([all_candidates_df, new_candidates_df]).drop_duplicates(subset=['persona_name'])
+            retries += 1
+        
+        if high_quality_personas_df.empty:
+            st.warning("經過多次嘗試，未能找到足夠數量關聯度 >80% 的 Persona。現為您呈現最相關的候選結果。")
+            if not all_candidates_df.empty:
+                return all_candidates_df.sort_values(by='score', ascending=False).head(target_count)
+            else:
+                st.error("AI 未能生成任何有效的 Persona。請檢查您的 API 金鑰或嘗試不同的主題。")
+                return None
+        
+        return high_quality_personas_df.sort_values(by='score', ascending=False).head(target_count)
+
+    except Exception as e:
+        st.error(f"自動生成 Persona 時發生嚴重錯誤: {e}")
+        return None
 
 
 def create_query_fan_out_prompt(topic):
@@ -180,6 +211,28 @@ def generate_query_fan_out_with_gemini(topic, api_key):
         return df
     except Exception as e:
         st.error(f"自動生成 Query Fan Out 時發生錯誤: {e}")
+        return None
+
+def process_and_embed_personas(df, api_key):
+    """為 Persona DataFrame 生成 Embeddings"""
+    try:
+        genai.configure(api_key=api_key)
+        df['embedding_text'] = df['summary'].fillna('') + ' | ' + \
+                               df['goals'].fillna('') + ' | ' + \
+                               df['pain_points'].fillna('') + ' | ' + \
+                               df['keywords'].fillna('')
+        
+        texts_to_embed = df['embedding_text'].tolist()
+        
+        result = genai.embed_content(
+            model='models/text-embedding-004',
+            content=texts_to_embed,
+            task_type="RETRIEVAL_DOCUMENT"
+        )
+        df['embeddings'] = result['embedding']
+        return df
+    except Exception as e:
+        st.error(f"生成 Persona Embeddings 時發生錯誤: {e}")
         return None
 
 def create_dynamic_prompt(topic, selected_personas_df, query_fan_out_df=None):
@@ -379,6 +432,9 @@ if 'api_key_configured' not in st.session_state:
     st.session_state.api_key_configured = False
 if 'strategy_text' not in st.session_state:
     st.session_state.strategy_text = None
+if 'personas_are_generated' not in st.session_state:
+    st.session_state.personas_are_generated = False
+
 
 # --- Streamlit 介面佈局 ---
 
@@ -407,50 +463,8 @@ with st.sidebar:
     st.markdown("---")
 
     st.subheader("2. Persona 資料")
-    
-    # 區塊 A: AI 輔助生成
-    with st.expander("AI 輔助生成 Persona (建議)"):
-        st.markdown("若您沒有現成的 Persona 檔案，可使用此功能。")
-        
-        if st.button("產生 Persona 生成指令", key="gen_persona_prompt"):
-            if not topic:
-                st.warning("請先輸入核心主題。")
-            else:
-                st.session_state.persona_prompt = create_iterative_persona_prompt(topic)
-
-        if 'persona_prompt' in st.session_state:
-            st.text_area("1. 複製以下指令，並到您的 Gemini 介面執行", value=st.session_state.persona_prompt, height=200)
-            
-            pasted_persona_csv = st.text_area("2. 將 Gemini 生成的 CSV 結果貼於此處", height=150, key="pasted_persona")
-            
-            if st.button("處理貼上的 Persona 資料", key="process_pasted_persona"):
-                if pasted_persona_csv:
-                    try:
-                        # 智慧解析貼上的內容
-                        match = re.search(r'```csv\n(.*?)\n```', pasted_persona_csv, re.DOTALL)
-                        if match:
-                            csv_text = match.group(1)
-                        else:
-                            required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
-                            header_str = '"' + '","'.join(required_headers) + '"'
-                            csv_start_index = pasted_persona_csv.find(header_str)
-                            if csv_start_index != -1:
-                                csv_text = pasted_persona_csv[csv_start_index:]
-                            else:
-                                csv_text = pasted_persona_csv
-
-                        csv_io = io.StringIO(csv_text)
-                        df = pd.read_csv(csv_io)
-                        st.session_state.persona_df = df
-                        st.success(f"成功處理 {len(df)} 筆貼上的 Persona 資料！")
-                    except Exception as e:
-                        st.error(f"處理貼上資料時發生錯誤，請確認格式是否為標準 CSV: {e}")
-                else:
-                    st.warning("請先貼上資料。")
-
-    # 區塊 B: 上傳檔案
     uploaded_persona_file = st.file_uploader(
-        "或上傳您自己的 Persona CSV 檔案",
+        "上傳 Persona CSV 檔案 (建議)",
         type="csv",
         key="persona_uploader",
     )
@@ -465,10 +479,22 @@ with st.sidebar:
                 st.session_state.persona_df = None
             else:
                 st.session_state.persona_df = df
+                st.session_state.personas_are_generated = False
                 st.success(f"成功載入 {len(df)} 筆 Persona 資料！")
         except Exception as e:
             st.error(f"Persona 檔案讀取失敗：{e}")
             st.session_state.persona_df = None
+    
+    if uploaded_persona_file is None and st.session_state.persona_df is None:
+        if st.button("🤖 自動生成 Persona 範例", use_container_width=True):
+            if not st.session_state.api_key_configured or not topic:
+                st.warning("請先輸入 API 金鑰和核心主題。")
+            else:
+                generated_df = generate_and_validate_personas(topic, api_key)
+                if generated_df is not None:
+                    st.session_state.persona_df = generated_df
+                    st.session_state.personas_are_generated = True
+                    st.success(f"已成功為您生成 {len(generated_df)} 筆高關聯度 Persona！")
     
     st.markdown("---")
 
@@ -513,7 +539,7 @@ with st.sidebar:
         elif not topic:
             st.warning("請輸入核心主題。")
         elif st.session_state.persona_df is None:
-            st.warning("請先上傳或生成並處理 Persona 資料。")
+            st.warning("請先上傳或自動生成 Persona 資料。")
         else:
             if 'embeddings' not in st.session_state.persona_df.columns:
                 with st.spinner("正在為 Persona 資料建立語意索引..."):
