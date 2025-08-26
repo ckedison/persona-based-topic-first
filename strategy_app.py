@@ -10,7 +10,7 @@ import ast
 
 # --- 頁面設定 ---
 st.set_page_config(
-    page_title="互動式策略儀表板",
+    page_title="Topic first  策略產生器（beta)",
     page_icon="🎯",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -386,7 +386,7 @@ if 'strategy_text' not in st.session_state:
 
 # --- Streamlit 介面佈局 ---
 
-st.title("🎯 互動式策略儀表板 (語意分析版)")
+st.title("🎯 Topic first  策略產生器（beta) (語意分析版)")
 st.markdown("上傳您的 Persona，讓 AI 理解語意並為您打造主題優先的內容策略")
 
 with st.sidebar:
