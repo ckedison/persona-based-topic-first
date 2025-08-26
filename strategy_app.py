@@ -82,6 +82,29 @@ def create_query_fan_out_prompt(topic):
 請確保生成的查詢涵蓋不同的類型與用戶意圖，以展現主題的全貌。請開始生成。
 """
 
+def generate_query_fan_out_with_gemini(topic, api_key):
+    """使用 Gemini API 生成 Query Fan Out DataFrame"""
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        prompt = create_query_fan_out_prompt(topic)
+        response = model.generate_content(prompt)
+        
+        csv_text = response.text.strip().replace('```csv', '').replace('```', '')
+        
+        csv_io = io.StringIO(csv_text)
+        df = pd.read_csv(csv_io)
+        
+        required_headers = ['query', 'type', 'user_intent', 'reasoning']
+        if not all(h in df.columns for h in required_headers):
+            st.error("AI 生成的 Query Fan Out 格式不符，請稍後再試。")
+            return None
+            
+        return df
+    except Exception as e:
+        st.error(f"自動生成 Query Fan Out 時發生錯誤: {e}")
+        return None
+
 def process_and_embed_personas(df, api_key):
     """為 Persona DataFrame 生成 Embeddings"""
     try:
@@ -408,30 +431,16 @@ with st.sidebar:
             st.error(f"Query Fan Out 檔案讀取失敗：{e}")
             st.session_state.query_fan_out_df = None
             
-    with st.expander("需要 AI 協助生成 Query Fan Out 嗎？"):
-        if st.button("產生 Query Fan Out 生成指令", key="gen_qfo_prompt"):
-            if not topic:
-                st.warning("請先輸入核心主題。")
+    if uploaded_query_file is None and st.session_state.query_fan_out_df is None:
+        if st.button("📊 自動生成 Query Fan Out", use_container_width=True):
+            if not st.session_state.api_key_configured or not topic:
+                st.warning("請先輸入 API 金鑰和核心主題。")
             else:
-                st.session_state.qfo_prompt = create_query_fan_out_prompt(topic)
-
-        if 'qfo_prompt' in st.session_state:
-            st.text_area("1. 複製以下指令，並到您的 Gemini 介面執行", value=st.session_state.qfo_prompt, height=200)
-            
-            pasted_qfo_csv = st.text_area("2. 將 Gemini 生成的 CSV 結果貼於此處", height=150, key="pasted_qfo")
-            
-            if st.button("處理貼上的 Query 資料", key="process_pasted_qfo"):
-                if pasted_qfo_csv:
-                    try:
-                        csv_io = io.StringIO(pasted_qfo_csv)
-                        df = pd.read_csv(csv_io)
-                        st.session_state.query_fan_out_df = df
-                        st.success(f"成功處理 {len(df)} 筆貼上的 Query 資料！")
-                    except Exception as e:
-                        st.error(f"處理貼上資料時發生錯誤，請確認格式是否為標準 CSV: {e}")
-                else:
-                    st.warning("請先貼上資料。")
-
+                with st.spinner("正在為您自動生成相關查詢..."):
+                    generated_qfo_df = generate_query_fan_out_with_gemini(topic, api_key)
+                    if generated_qfo_df is not None:
+                        st.session_state.query_fan_out_df = generated_qfo_df
+                        st.success(f"已成功為您生成 {len(generated_qfo_df)} 筆相關查詢！")
 
     st.markdown("---")
 
