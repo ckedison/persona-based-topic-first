@@ -305,7 +305,7 @@ def create_dynamic_prompt(topic, selected_personas_df, query_fan_out_df=None):
 
 現在，請扮演一位**內容製作總監**。請回顧以上**所有**為不同 Persona 生成的內容點子，並將它們整合成一個清晰的總表。
 
-這個表格的目的是讓團隊一目了然地知道總共需要製作哪些類型的內容，以及每個類型有哪些具體的點子。
+這個表格的目的是讓團隊一目而然地知道總共需要製作哪些類型的內容，以及每個類型有哪些具體的點子。
 
 請遵循以下表格格式，將**相似的「建議格式」**的點子歸類在一起：
 
@@ -497,14 +497,14 @@ with st.sidebar:
             
             # 檢查必要的欄位是否存在
             required_headers = ['persona_name', 'summary', 'goals', 'pain_points', 'keywords', 'preferred_formats']
-            # 如果有 'embeddings' 欄位，也將其視為有效
+            
             if 'embeddings' in df.columns:
                 required_headers.append('embeddings')
 
             missing_headers = [h for h in required_headers if h not in df.columns]
 
             if 'embeddings' not in df.columns:
-                 st.warning("提醒：您上傳的檔案不含語意向量 (Embeddings)。請點擊下方的按鈕為其生成。")
+                 st.warning("提醒：您上傳的檔案不含語意向量 (Embeddings)。")
 
             if missing_headers and 'embeddings' not in missing_headers:
                 st.error(f"Persona CSV 檔案缺少欄位: {', '.join(missing_headers)}")
@@ -516,20 +516,31 @@ with st.sidebar:
             st.error(f"Persona 檔案讀取失敗：{e}")
             st.session_state.persona_df = None
     
-    # 區塊 C: 本地端執行 Embedding
-    with st.expander("需要為 Persona 資料建立語意索引嗎？"):
-        st.markdown("如果您上傳了自己的檔案，或貼上了 AI 生成的資料，請點擊此處產生一段 Python 腳本，在您自己的電腦上安全地執行語意分析，以避免 API 超額問題。")
-        if st.button("產生本地端執行腳本", key="gen_embedding_script"):
-            if st.session_state.persona_df is not None:
+    # 區塊 C: 建立語意索引 (選填)
+    if st.session_state.persona_df is not None and 'embeddings' not in st.session_state.persona_df.columns:
+        st.markdown("---")
+        st.subheader("建立語意索引 (選填)")
+        st.markdown("點擊下方按鈕，可為您的 Persona 資料建立語意索引，以提升匹配精準度。")
+        
+        if st.button("在 App 中建立索引", key="embed_in_app"):
+            if not st.session_state.api_key_configured:
+                st.warning("請先輸入 API 金鑰。")
+            else:
+                with st.spinner("正在為 Persona 資料建立語意索引..."):
+                    st.session_state.persona_df = process_and_embed_personas(st.session_state.persona_df, api_key)
+                    if st.session_state.persona_df is not None:
+                        st.success("語意索引建立完成！")
+
+        with st.expander("或產生本地端執行腳本 (推薦)"):
+            st.markdown("若資料量龐大，建議產生 Python 腳本在您自己的電腦上執行，以避免 API 超額問題。")
+            if st.button("產生本地端執行腳本", key="gen_embedding_script"):
                 df_string = st.session_state.persona_df.to_csv(index=False)
                 st.session_state.embedding_script = create_embedding_script(df_string, api_key)
-            else:
-                st.warning("請先上傳或貼上 Persona 資料。")
-        
-        if 'embedding_script' in st.session_state:
-            st.text_area("1. 複製以下 Python 程式碼，儲存成 .py 檔案", value=st.session_state.embedding_script, height=200)
-            st.markdown("2. 在您的電腦上安裝必要的套件 (`pip install pandas google-generativeai`) 並執行此腳本。")
-            st.markdown("3. 執行成功後，將生成的 `personas_with_embeddings.csv` 檔案，透過上方的上傳區塊重新上傳。")
+            
+            if 'embedding_script' in st.session_state:
+                st.text_area("1. 複製以下 Python 程式碼，儲存成 .py 檔案", value=st.session_state.embedding_script, height=200)
+                st.markdown("2. 在您的電腦上安裝必要的套件 (`pip install pandas google-generativeai`) 並執行此腳本。")
+                st.markdown("3. 執行成功後，將生成的 `personas_with_embeddings.csv` 檔案，透過上方的上傳區塊重新上傳。")
 
 
     st.markdown("---")
@@ -576,39 +587,58 @@ with st.sidebar:
             st.warning("請輸入核心主題。")
         elif st.session_state.persona_df is None:
             st.warning("請先上傳或生成並處理 Persona 資料。")
-        elif 'embeddings' not in st.session_state.persona_df.columns:
-            st.warning("您的 Persona 資料尚未建立語意索引，請先在步驟 2 的 AI 輔助區塊中，生成並執行本地端腳本，再重新上傳檔案。")
         else:
-            with st.spinner("正在進行語意分析與匹配..."):
+            # 執行匹配
+            with st.spinner("正在進行分析與匹配..."):
                 try:
-                    # 將儲存為字串的 embeddings 轉回 list of floats
-                    st.session_state.persona_df['embeddings'] = st.session_state.persona_df['embeddings'].apply(ast.literal_eval)
-
-                    context_text = topic
-                    if st.session_state.query_fan_out_df is not None:
-                        queries = " ".join(st.session_state.query_fan_out_df['query'].fillna(''))
-                        intents = " ".join(st.session_state.query_fan_out_df['user_intent'].fillna(''))
-                        context_text = f"{topic} - 相關查詢與意圖: {queries} {intents}"
-
-                    context_embedding_result = genai.embed_content(
-                        model='models/text-embedding-004',
-                        content=context_text,
-                        task_type="RETRIEVAL_QUERY"
-                    )
-                    context_embedding = np.array(context_embedding_result['embedding']).reshape(1, -1)
-                    
-                    persona_embeddings = np.array(st.session_state.persona_df['embeddings'].tolist())
-                    similarities = cosine_similarity(context_embedding, persona_embeddings)[0]
-                    
                     df = st.session_state.persona_df.copy()
-                    df['score'] = similarities
+                    
+                    # 判斷使用何種匹配模式
+                    if 'embeddings' in df.columns and not df['embeddings'].isnull().all():
+                        st.info("偵測到語意索引，將使用語意分析模式。")
+                        # 將儲存為字串的 embeddings 轉回 list of floats
+                        df['embeddings'] = df['embeddings'].apply(ast.literal_eval)
+
+                        context_text = topic
+                        if st.session_state.query_fan_out_df is not None:
+                            queries = " ".join(st.session_state.query_fan_out_df['query'].fillna(''))
+                            intents = " ".join(st.session_state.query_fan_out_df['user_intent'].fillna(''))
+                            context_text = f"{topic} - 相關查詢與意圖: {queries} {intents}"
+
+                        context_embedding_result = genai.embed_content(
+                            model='models/text-embedding-004',
+                            content=context_text,
+                            task_type="RETRIEVAL_QUERY"
+                        )
+                        context_embedding = np.array(context_embedding_result['embedding']).reshape(1, -1)
+                        
+                        persona_embeddings = np.array(df['embeddings'].tolist())
+                        similarities = cosine_similarity(context_embedding, persona_embeddings)[0]
+                        df['score'] = similarities
+                    else:
+                        st.info("未偵測到語意索引，將使用關鍵字匹配模式。")
+                        context_text = topic
+                        if st.session_state.query_fan_out_df is not None:
+                            queries = " ".join(st.session_state.query_fan_out_df['query'].fillna(''))
+                            context_text += " " + queries
+                        
+                        topic_tokens = set(context_text.lower().split())
+
+                        def calculate_keyword_score(row):
+                            score = 0
+                            searchable_text = f"{row.get('pain_points', '')} {row.get('keywords', '')}".lower()
+                            for token in topic_tokens:
+                                if token in searchable_text:
+                                    score += 1
+                            return score
+                        
+                        df['score'] = df.apply(calculate_keyword_score, axis=1)
 
                     matched = df.sort_values(by='score', ascending=False).head(10)
-
                     st.session_state.matched_personas = matched
                     st.session_state.strategy_text = None 
                 except Exception as e:
-                    st.error(f"語意匹配時發生錯誤: {e}")
+                    st.error(f"策略分析時發生錯誤: {e}")
 
 # 主畫面
 if st.session_state.matched_personas is not None:
@@ -631,7 +661,7 @@ if st.session_state.matched_personas is not None:
                 st.markdown(f"**{row['persona_name']}**")
                 st.caption(row['summary'])
             with cols[2]:
-                st.info(f"關聯度: {row['score']:.0%}")
+                st.info(f"關聯度: {row['score']:.0%}" if isinstance(row['score'], float) else f"分數: {row['score']}")
 
     if selected_indices:
         st.markdown("---")
