@@ -596,8 +596,9 @@ with st.sidebar:
                     # 判斷使用何種匹配模式
                     if 'embeddings' in df.columns and not df['embeddings'].isnull().all():
                         st.info("偵測到語意索引，將使用語意分析模式。")
-                        # 將儲存為字串的 embeddings 轉回 list of floats
-                        df['embeddings'] = df['embeddings'].apply(ast.literal_eval)
+                        # 智慧判斷是否需要轉換
+                        if isinstance(df['embeddings'].iloc[0], str):
+                            df['embeddings'] = df['embeddings'].apply(ast.literal_eval)
 
                         context_text = topic
                         if st.session_state.query_fan_out_df is not None:
